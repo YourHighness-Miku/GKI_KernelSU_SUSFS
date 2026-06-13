@@ -132,33 +132,76 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
     def _apply_susfs_commit(self):
         if not self.config.susfs_commit or not self.susfs_dir.exists():
             return
+
+        logger.info(f"=== 切换 SUSFS commit/tag: {self.config.susfs_commit} ===")
         self._chdir(self.susfs_dir)
+
+        self._run_cmd("git fetch --all --tags --prune", check=True)
+
         if self.config.susfs_commit.startswith("HEAD~"):
-            self._run_cmd("git fetch origin", check=False)
-            self._run_cmd(f"git reset --hard {self.config.susfs_commit}", check=False)
+            self._run_cmd(f"git reset --hard {self.config.susfs_commit}", check=True)
         else:
-            self._run_cmd("git fetch origin", check=False)
-            self._run_cmd(f"git checkout {self.config.susfs_commit}", check=False)
+            self._run_cmd(f"git checkout --force {self.config.susfs_commit}", check=True)
+
+        self._run_cmd("git rev-parse --short HEAD", check=True)
         self._chdir(self.workspace)
 
     def clone_repositories(self):
-        logger.info("=== 开始克隆仓库 ===")
-        for name, repo_dir, url, branch in [
+        logger.info("=== 开始克隆/更新仓库 ===")
+
+        repos = [
             ("SUSFS", self.susfs_dir, SUSFS_REPO_CONFIG['repo_url'], self.config.kernel_branch),
             ("SukiSU Patch", self.sukisu_patch_dir, SUKISU_PATCH_REPO_CONFIG['repo_url'], None),
             ("AnyKernel3", self.anykernel_dir, ANYKERNEL_CONFIG['repo_url'], ANYKERNEL_CONFIG['branch']),
             ("Kernel Patches", self.kernel_patches_dir, KERNEL_PATCHES_CONFIG['repo_url'], None),
-        ]:
+        ]
+
+        for name, repo_dir, url, branch in repos:
             if not repo_dir.exists():
-                cmd = f"git clone {url}"
+                cmd = f"git clone {url} {repo_dir}"
                 if branch:
                     cmd += f" -b {branch}"
-                logger.info(f"克隆 {name}...")
-                self._run_cmd(cmd, check=False)
+                logger.info(f"克隆 {name}: {url} {branch or ''}")
+                self._run_cmd(cmd, check=True)
             else:
-                logger.info(f"{name} 已存在，跳过")
+                logger.info(f"{name} 已存在，强制更新到目标分支/最新提交")
+                self._chdir(repo_dir)
+                self._run_cmd("git fetch --all --tags --prune", check=True)
+
+                if branch:
+                    self._run_cmd(f"git checkout --force {branch}", check=True)
+                    self._run_cmd(f"git reset --hard origin/{branch}", check=True)
+                else:
+                    self._run_cmd("git reset --hard HEAD", check=True)
+
+                self._chdir(self.workspace)
+
         self._apply_susfs_commit()
-        logger.info("=== 仓库克隆完成 ===")
+        self._verify_susfs_source_version()
+        logger.info("=== 仓库克隆/更新完成 ===")
+
+    def _verify_susfs_source_version(self):
+        logger.info("=== 检查 SUSFS 源码版本 ===")
+
+        susfs_header = self.susfs_dir / "kernel_patches/include/linux/susfs.h"
+        if not susfs_header.exists():
+            raise RuntimeError(f"SUSFS 版本头文件不存在: {susfs_header}")
+
+        with open(susfs_header, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        match = re.search(r'#define\s+SUSFS_VERSION\s+"([^"]+)"', content)
+        if not match:
+            raise RuntimeError("无法从 susfs.h 读取 SUSFS_VERSION")
+
+        version = match.group(1)
+        logger.info(f"SUSFS source version: {version}")
+
+        if version != "v2.1.0":
+            raise RuntimeError(
+                f"SUSFS 源码版本错误：当前是 {version}，目标必须是 v2.1.0。"
+                f"请检查 susfs4ksu 的 {self.config.kernel_branch} 分支，或在工作流 SUSFS commit hash 中填写真正的 v2.1.0 commit/tag。"
+            )
 
     def clone_toolchain(self):
         logger.info("=== 克隆工具链 ===")
@@ -282,24 +325,64 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write(content)
 
     def apply_susfs_patches(self):
-        logger.info("=== 应用 SUSFS 补丁 ===")
+        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 ===")
+
+        self._verify_susfs_source_version()
+
         self._chdir(self.work_dir)
         common_dir = self.work_dir / "common"
+        if not common_dir.exists():
+            raise RuntimeError(f"common 目录不存在: {common_dir}")
+
         susfs_patch = self.susfs_dir / "kernel_patches" / self.config.get_susfs_patch_filename()
-        if susfs_patch.exists():
-            self._run_cmd(f"cp {susfs_patch} {common_dir}/", check=False)
-        for src, dst in [
-            (self.susfs_dir / "kernel_patches/fs", common_dir / "fs/"),
-            (self.susfs_dir / "kernel_patches/include/linux", common_dir / "include/linux/"),
-        ]:
-            if src.exists():
-                self._run_cmd(f"cp -r {src}/* {dst}", check=False)
-        if susfs_patch.exists():
-            patch_file = common_dir / self.config.get_susfs_patch_filename()
-            if patch_file.exists():
-                self._chdir(common_dir)
-                self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=False)
-                self._chdir(self.work_dir)
+        if not susfs_patch.exists():
+            raise RuntimeError(f"SUSFS 主补丁不存在: {susfs_patch}")
+
+        # 复制 SUSFS 源码文件，必须严格执行。
+        copy_jobs = [
+            (self.susfs_dir / "kernel_patches/fs", common_dir / "fs"),
+            (self.susfs_dir / "kernel_patches/include/linux", common_dir / "include/linux"),
+        ]
+
+        for src, dst in copy_jobs:
+            if not src.exists():
+                raise RuntimeError(f"SUSFS 源码目录不存在: {src}")
+
+            self._run_cmd(f"mkdir -p {dst} && cp -r {src}/* {dst}/", check=True)
+
+        # 复制并应用主补丁。
+        patch_file = common_dir / self.config.get_susfs_patch_filename()
+        self._run_cmd(f"cp {susfs_patch} {patch_file}", check=True)
+
+        self._chdir(common_dir)
+        self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=True)
+
+        # 绝对不能允许 .rej 存在，否则说明补丁没有完整打进去。
+        reject_files = list(common_dir.rglob("*.rej"))
+        if reject_files:
+            reject_list = "\n".join(str(p) for p in reject_files[:50])
+            raise RuntimeError(f"SUSFS 补丁存在失败片段 .rej，禁止继续构建:\n{reject_list}")
+
+        # 检查补丁后的内核源码里是否存在 SUSFS_VERSION。
+        patched_header = common_dir / "include/linux/susfs.h"
+        if not patched_header.exists():
+            raise RuntimeError(f"补丁后 common/include/linux/susfs.h 不存在: {patched_header}")
+
+        with open(patched_header, "r", encoding="utf-8", errors="ignore") as f:
+            patched_content = f.read()
+
+        match = re.search(r'#define\s+SUSFS_VERSION\s+"([^"]+)"', patched_content)
+        if not match:
+            raise RuntimeError("补丁后的 common/include/linux/susfs.h 里找不到 SUSFS_VERSION")
+
+        patched_version = match.group(1)
+        logger.info(f"Patched kernel SUSFS_VERSION: {patched_version}")
+
+        if patched_version != "v2.1.0":
+            raise RuntimeError(f"补丁后的 SUSFS_VERSION 错误：{patched_version}，目标必须是 v2.1.0")
+
+        self._chdir(self.work_dir)
+        logger.info("=== SUSFS v2.1.0 补丁应用完成 ===")
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
