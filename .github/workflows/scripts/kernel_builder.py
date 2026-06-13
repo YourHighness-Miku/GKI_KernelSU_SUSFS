@@ -290,27 +290,59 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write("obj-y += hmbird_patch.o\n")
 
     def add_kernelsu(self):
-        logger.info("=== 添加 SukiSU Ultra KernelSU - susfs-main integrated ===")
+        logger.info("=== 添加 SukiSU Ultra KernelSU - builtin with SUSFS check ===")
         self._chdir(self.work_dir)
 
-        # 使用 SukiSU Ultra 自带 SUSFS 集成分支。
-        # 不再用 builtin + 外部 10_enable_susfs_for_ksu.patch。
-        # 如果后面再 checkout 到 0ca744a，会把 susfs-main 覆盖掉，所以这里忽略 commit hash。
-        setup_url = KSU_REPO_CONFIG["setup_script"]
-        self._run_cmd(f"curl -LSs {setup_url} | bash -s susfs-main", check=True)
+        # 使用 SukiSU Ultra 官方 builtin。
+        # 不再使用 susfs-main。
+        # 不再 checkout 用户填的 KernelSU commit hash，避免把 builtin 覆盖回旧提交。
+        setup_url = "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
+
+        # 清理旧 KernelSU，避免上一次失败构建残留污染。
+        self._run_cmd("rm -rf KernelSU", check=False)
+
+        self._run_cmd(f"curl -LSs {setup_url} | bash -s builtin", check=True)
 
         ksu_dir = self.work_dir / "KernelSU"
         if not ksu_dir.exists():
-            raise RuntimeError(f"SukiSU susfs-main 安装后 KernelSU 目录不存在: {ksu_dir}")
+            raise RuntimeError(f"SukiSU builtin 安装后 KernelSU 目录不存在: {ksu_dir}")
 
         self._chdir(ksu_dir)
+
+        self._run_cmd("git rev-parse --abbrev-ref HEAD", check=False)
         self._run_cmd("git rev-parse --short HEAD", check=False)
+
+        # 立刻检查 KSU_SUSFS，防止跑到后面才失败。
+        kconfig_files = list(ksu_dir.rglob("Kconfig*"))
+        if not kconfig_files:
+            raise RuntimeError(f"SukiSU builtin 检查失败：KernelSU 目录里没有 Kconfig 文件: {ksu_dir}")
+
+        kconfig_hit = False
+        kconfig_hit_file = None
+
+        for candidate in kconfig_files:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            if "KSU_SUSFS" in content:
+                kconfig_hit = True
+                kconfig_hit_file = candidate
+                break
+
+        if not kconfig_hit:
+            raise RuntimeError(
+                "SukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
+                "说明 builtin 分支也没有拉到带 SUSFS 的 KernelSU，禁止继续生成包。"
+            )
+
+        logger.info(f"SukiSU builtin KSU_SUSFS check passed: {kconfig_hit_file}")
+
         self._chdir(self.work_dir)
 
         if self.config.kernelsu_commit:
             logger.warning(
-                "当前使用 SukiSU susfs-main 集成分支，已忽略 KernelSU commit hash，"
-                "不要再 checkout 到 0ca744a，否则会把 susfs-main 覆盖掉。"
+                "当前使用 SukiSU builtin 分支，已忽略 KernelSU commit hash。"
+                "Run workflow 页面必须把 KernelSU commit hash 清空，不要填 0ca744a。"
             )
 
     def add_bbg(self):
@@ -337,7 +369,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write(content)
 
     def apply_susfs_patches(self):
-        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 + SukiSU susfs-main integration ===")
+        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 + SukiSU builtin integration ===")
 
         self._verify_susfs_source_version()
 
@@ -395,15 +427,14 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if patched_version != "v2.1.0":
             raise RuntimeError(f"补丁后的 SUSFS_VERSION 错误：{patched_version}，目标必须是 v2.1.0")
 
-        # 3. 当前使用 SukiSU Ultra 的 susfs-main 集成分支。
+        # 3. 当前使用 SukiSU Ultra builtin。
         #    不再应用 susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch。
-        #    原因：该 patch 基于原版 KernelSU，当前 SukiSU Ultra 会在
-        #    kernel/core/init.c 和 kernel/policy/app_profile.c 产生关键 .rej。
-        logger.info("=== 跳过外部 KernelSU SUSFS patch，改用 SukiSU susfs-main 自带集成 ===")
+        #    原因：外部 KernelSU patch 会在当前 SukiSU Ultra 的 init.c / app_profile.c 产生关键 .rej。
+        logger.info("=== 跳过外部 KernelSU SUSFS patch，改用 SukiSU builtin 自带集成检查 ===")
 
         self._chdir(ksu_dir)
 
-        # 确保没有残留 .rej。只要有 .rej，说明源码被失败补丁污染，禁止继续。
+        # 确保没有残留 .rej。
         leftover_rejects = list(ksu_dir.rglob("*.rej"))
         if leftover_rejects:
             reject_list = "\n".join(str(p) for p in leftover_rejects[:50])
@@ -412,7 +443,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 + reject_list
             )
 
-        # 4. 强制检查 SukiSU susfs-main 是否真的带了 SUSFS Kconfig。
+        # 4. 强制检查 SukiSU builtin 是否真的带了 SUSFS Kconfig。
         kconfig_files = list(ksu_dir.rglob("Kconfig*"))
         if not kconfig_files:
             raise RuntimeError(f"KernelSU 目录里找不到任何 Kconfig 文件: {ksu_dir}")
@@ -431,8 +462,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if not kconfig_hit:
             raise RuntimeError(
-                "SukiSU susfs-main 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
-                "说明没有真正切到 susfs-main，或者 setup.sh 没拉到带 SUSFS 的分支。"
+                "SukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
+                "说明没有真正拉到带 SUSFS 的 builtin 分支，禁止继续生成包。"
             )
 
         # 5. 强制检查是否存在 susfs_init 接入。
@@ -450,7 +481,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if not init_hit:
             raise RuntimeError(
-                "SukiSU susfs-main 检查失败：KernelSU 源码里没有找到 susfs_init。"
+                "SukiSU builtin 检查失败：KernelSU 源码里没有找到 susfs_init。"
                 "说明 SUSFS 初始化没有真正接入，禁止继续生成包。"
             )
 
@@ -459,7 +490,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         logger.info("=== KernelSU SUSFS integration check passed ===")
 
         self._chdir(self.work_dir)
-        logger.info("=== SUSFS v2.1.0 + SukiSU susfs-main integration 补丁应用完成 ===")
+        logger.info("=== SUSFS v2.1.0 + SukiSU builtin integration 补丁应用完成 ===")
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
@@ -496,21 +527,10 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         zram_root = self.sukisu_patch_dir / "other/zram"
         self._chdir(common_dir)
 
-        # 关键原则：
-        # 1. 不能把 other/zram/lz4k/lib/* 整个摊平复制到 common/lib/
-        #    否则会覆盖 AOSP 原始 lib/Kconfig 和 lib/Makefile。
-        # 2. 但必须完整复制 LZ4K/LZ4KD 真正需要的源码：
-        #    crypto/lz4k.c、crypto/lz4kd.c、lib/lz4k/、lib/lz4kd/。
-
         safe_copy_jobs = [
-            # headers
             (zram_root / "lz4k/include/linux", common_dir / "include/linux"),
-
-            # lib codec directories
             (zram_root / "lz4k/lib/lz4k",  common_dir / "lib/lz4k"),
             (zram_root / "lz4k/lib/lz4kd", common_dir / "lib/lz4kd"),
-
-            # crypto api source files
             (zram_root / "lz4k/crypto/lz4k.c",  common_dir / "crypto/lz4k.c"),
             (zram_root / "lz4k/crypto/lz4kd.c", common_dir / "crypto/lz4kd.c"),
         ]
@@ -524,15 +544,12 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             else:
                 self._run_cmd(f"mkdir -p {dst.parent} && cp {src} {dst}", check=True)
 
-        # OPlus LZ4KD 源码作为独立目录复制到 lib/ 下，
-        # 不能把里面的内容摊平到 common/lib/，避免覆盖 lib/Kconfig / lib/Makefile。
         oplus_src = zram_root / "lz4k_oplus"
         if oplus_src.exists():
             self._run_cmd(f"cp -r {oplus_src} {common_dir}/lib/", check=True)
         else:
             logger.warning(f"ZRAM OPlus source missing, skip: {oplus_src}")
 
-        # 提前检查关键源码是否真的存在，避免跑到 Bazel 编译阶段才炸。
         required_sources = [
             common_dir / "crypto/lz4k.c",
             common_dir / "crypto/lz4kd.c",
@@ -544,8 +561,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             if not required.exists():
                 raise RuntimeError(f"LZ4KD 源码复制不完整，缺少: {required}")
 
-        # 应用 LZ4KD 接入补丁。
-        # 必须 check=True，补丁失败就立刻停止，不能带着坏源码继续编译。
         zram_patch_dir = zram_root / f"zram_patch/{self.config.kernel_version}"
 
         for patch_name in ["lz4kd.patch", "lz4k_oplus.patch"]:
