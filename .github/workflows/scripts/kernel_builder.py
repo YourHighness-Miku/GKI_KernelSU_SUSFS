@@ -325,20 +325,25 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write(content)
 
     def apply_susfs_patches(self):
-        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 ===")
+        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 + KernelSU integration ===")
 
         self._verify_susfs_source_version()
 
         self._chdir(self.work_dir)
         common_dir = self.work_dir / "common"
+        ksu_dir = self.work_dir / "KernelSU"
+
         if not common_dir.exists():
             raise RuntimeError(f"common 目录不存在: {common_dir}")
+
+        if not ksu_dir.exists():
+            raise RuntimeError(f"KernelSU 目录不存在: {ksu_dir}")
 
         susfs_patch = self.susfs_dir / "kernel_patches" / self.config.get_susfs_patch_filename()
         if not susfs_patch.exists():
             raise RuntimeError(f"SUSFS 主补丁不存在: {susfs_patch}")
 
-        # 复制 SUSFS 源码文件，必须严格执行。
+        # 1. 复制 SUSFS 核心源码到 common。
         copy_jobs = [
             (self.susfs_dir / "kernel_patches/fs", common_dir / "fs"),
             (self.susfs_dir / "kernel_patches/include/linux", common_dir / "include/linux"),
@@ -347,23 +352,20 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         for src, dst in copy_jobs:
             if not src.exists():
                 raise RuntimeError(f"SUSFS 源码目录不存在: {src}")
-
             self._run_cmd(f"mkdir -p {dst} && cp -r {src}/* {dst}/", check=True)
 
-        # 复制并应用主补丁。
+        # 2. 应用 GKI/common 侧 SUSFS 主补丁。
         patch_file = common_dir / self.config.get_susfs_patch_filename()
         self._run_cmd(f"cp {susfs_patch} {patch_file}", check=True)
 
         self._chdir(common_dir)
         self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=True)
 
-        # 绝对不能允许 .rej 存在，否则说明补丁没有完整打进去。
         reject_files = list(common_dir.rglob("*.rej"))
         if reject_files:
             reject_list = "\n".join(str(p) for p in reject_files[:50])
-            raise RuntimeError(f"SUSFS 补丁存在失败片段 .rej，禁止继续构建:\n{reject_list}")
+            raise RuntimeError(f"SUSFS GKI 主补丁存在失败片段 .rej，禁止继续构建:\n{reject_list}")
 
-        # 检查补丁后的内核源码里是否存在 SUSFS_VERSION。
         patched_header = common_dir / "include/linux/susfs.h"
         if not patched_header.exists():
             raise RuntimeError(f"补丁后 common/include/linux/susfs.h 不存在: {patched_header}")
@@ -381,8 +383,79 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if patched_version != "v2.1.0":
             raise RuntimeError(f"补丁后的 SUSFS_VERSION 错误：{patched_version}，目标必须是 v2.1.0")
 
+        # 3. 关键修复：应用 KernelSU/SukiSU 侧 SUSFS 启用补丁。
+        #    如果漏掉这里，最终刷入后 ksu_susfs 仍可能检测成 v1.5.2。
+        ksu_patch_dir = self.susfs_dir / "kernel_patches/KernelSU"
+        if not ksu_patch_dir.exists():
+            raise RuntimeError(f"SUSFS KernelSU 补丁目录不存在: {ksu_patch_dir}")
+
+        ksu_patches = sorted(ksu_patch_dir.glob("*.patch"))
+        if not ksu_patches:
+            raise RuntimeError(f"SUSFS KernelSU 补丁目录里没有 patch: {ksu_patch_dir}")
+
+        self._chdir(ksu_dir)
+
+        for p in ksu_patches:
+            logger.info(f"应用 KernelSU SUSFS 补丁: {p.name}")
+            self._run_cmd(f"patch -p1 --fuzz=3 < {p}", check=True)
+
+        ksu_reject_files = list(ksu_dir.rglob("*.rej"))
+        if ksu_reject_files:
+            reject_list = "\n".join(str(p) for p in ksu_reject_files[:50])
+            raise RuntimeError(f"SUSFS KernelSU 补丁存在失败片段 .rej，禁止继续构建:\n{reject_list}")
+
+        # 4. 强制检查 KernelSU/SukiSU 侧是否真的接入 SUSFS。
+        ksu_kconfig_candidates = [
+            ksu_dir / "kernel/Kconfig",
+            ksu_dir / "kernel/Kconfig.legacy",
+        ]
+
+        ksu_init_candidates = [
+            ksu_dir / "kernel/core/init.c",
+            ksu_dir / "kernel/core_hook.c",
+            ksu_dir / "kernel/kernel.c",
+        ]
+
+        ksu_kconfig = next((p for p in ksu_kconfig_candidates if p.exists()), None)
+        if not ksu_kconfig:
+            raise RuntimeError(
+                "找不到 KernelSU Kconfig，已检查:\n"
+                + "\n".join(str(p) for p in ksu_kconfig_candidates)
+            )
+
+        with open(ksu_kconfig, "r", encoding="utf-8", errors="ignore") as f:
+            kconfig_content = f.read()
+
+        if "config KSU_SUSFS" not in kconfig_content and "KSU_SUSFS" not in kconfig_content:
+            raise RuntimeError(f"{ksu_kconfig} 里没有 KSU_SUSFS，KernelSU SUSFS 补丁没有真正生效")
+
+        init_hit = False
+        init_hit_file = None
+
+        for candidate in ksu_init_candidates:
+            if not candidate.exists():
+                continue
+
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                init_content = f.read()
+
+            if "susfs_init" in init_content:
+                init_hit = True
+                init_hit_file = candidate
+                break
+
+        if not init_hit:
+            raise RuntimeError(
+                "没有在 KernelSU/SukiSU 初始化源码里找到 susfs_init，SUSFS 初始化没有真正接入。已检查:\n"
+                + "\n".join(str(p) for p in ksu_init_candidates)
+            )
+
+        logger.info(f"KernelSU SUSFS Kconfig check passed: {ksu_kconfig}")
+        logger.info(f"KernelSU SUSFS init check passed: {init_hit_file}")
+        logger.info("=== KernelSU SUSFS integration check passed ===")
+
         self._chdir(self.work_dir)
-        logger.info("=== SUSFS v2.1.0 补丁应用完成 ===")
+        logger.info("=== SUSFS v2.1.0 + KernelSU integration 补丁应用完成 ===")
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
@@ -805,72 +878,3 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self._run_cmd("gzip -n -k -f -9 Image", check=False)
 
         for kernel_file, output_file in [("Image", "boot.img"), ("Image.gz", "boot-gz.img"), ("Image.lz4", "boot-lz4.img")]:
-            kernel_path = bootimgs_dir / kernel_file
-            if not kernel_path.exists():
-                continue
-            cmd = f"$MKBOOTIMG --header_version 4 --kernel {kernel_file} --output {output_file}"
-            if has_ramdisk:
-                cmd += f" --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level {self.config.os_patch_level}"
-            self._run_cmd(cmd, check=False)
-            self._run_cmd(f"$AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image {output_file} --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH", check=False)
-            dest = self.work_dir / f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}-{output_file}"
-            self._run_cmd(f"cp {output_file} {dest}", check=False)
-            artifacts.append(str(dest))
-
-    def create_anykernel_zips(self) -> list:
-        logger.info("=== 创建 AnyKernel3 ZIP 文件 ===")
-        self._chdir(self.work_dir)
-        artifacts = []
-        ak3_dir = self.anykernel_dir
-
-        for suffix in ["", "-lz4", "-gz"]:
-            image_file = f"Image{suffix}"
-            image_path = self.work_dir / image_file
-            if not image_path.exists():
-                continue
-            zip_name = f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}-AnyKernel3{suffix}.zip"
-            self._run_cmd(f"cp {image_path} {ak3_dir}/", check=False)
-            self._chdir(ak3_dir)
-            self._run_cmd(f"zip -r ../{zip_name} ./*", check=False)
-            self._run_cmd(f"rm {ak3_dir}/{image_file}", check=False)
-            artifacts.append(str(self.work_dir / zip_name))
-            self._chdir(self.work_dir)
-        return artifacts
-
-    def build(self) -> BuildResult:
-        import time
-        start_time = time.time()
-        logger.info("=" * 50)
-        logger.info(f"开始 GKI Kernel 构建 - {self.config.config_name}")
-        logger.info("=" * 50)
-
-        try:
-            self.clone_repositories()
-            self.clone_toolchain()
-            self.setup_repo_tool()
-            self.init_and_sync_kernel()
-            self.add_kernel_supatch()
-            self.add_kernelsu()
-            self.add_bbg()
-            self.apply_susfs_patches()
-            self.apply_sukisu_patches()
-            self.apply_zram_patches()
-            self.apply_task_mmu_fixes()
-            self.configure_kernel()
-            self.configure_kernel_name()
-            self.show_kernel_config()
-
-            if not self.build_kernel():
-                return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
-
-            self.patch_kpm_image()
-            artifacts = []
-            artifacts.extend(self.prepare_boot_images())
-            artifacts.extend(self.create_anykernel_zips())
-
-            build_time = time.time() - start_time
-            logger.info(f"构建成功! 耗时: {build_time:.2f} 秒, 生成 {len(artifacts)} 个产物")
-            return BuildResult(success=True, config=self.config, message="构建成功", artifacts=artifacts, build_time=build_time)
-        except Exception as e:
-            logger.error(f"构建过程出错: {e}")
-            return BuildResult(success=False, config=self.config, message=str(e), build_time=time.time() - start_time)
