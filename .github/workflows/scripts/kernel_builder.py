@@ -290,17 +290,28 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write("obj-y += hmbird_patch.o\n")
 
     def add_kernelsu(self):
-        logger.info("=== 添加 KernelSU ===")
+        logger.info("=== 添加 SukiSU Ultra KernelSU - susfs-main integrated ===")
         self._chdir(self.work_dir)
-        setup_url = (f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/{self.config.kernelsu_commit}/kernel/setup.sh"
-                    if self.config.kernelsu_commit else KSU_REPO_CONFIG["setup_script"])
-        self._run_cmd(f"curl -LSs {setup_url} | bash -s builtin", check=False)
+
+        # 使用 SukiSU Ultra 自带 SUSFS 集成分支。
+        # 不再用 builtin + 外部 10_enable_susfs_for_ksu.patch。
+        # 如果后面再 checkout 到 0ca744a，会把 susfs-main 覆盖掉，所以这里忽略 commit hash。
+        setup_url = KSU_REPO_CONFIG["setup_script"]
+        self._run_cmd(f"curl -LSs {setup_url} | bash -s susfs-main", check=True)
+
+        ksu_dir = self.work_dir / "KernelSU"
+        if not ksu_dir.exists():
+            raise RuntimeError(f"SukiSU susfs-main 安装后 KernelSU 目录不存在: {ksu_dir}")
+
+        self._chdir(ksu_dir)
+        self._run_cmd("git rev-parse --short HEAD", check=False)
+        self._chdir(self.work_dir)
+
         if self.config.kernelsu_commit:
-            ksu_dir = self.work_dir / "KernelSU"
-            if ksu_dir.exists():
-                self._chdir(ksu_dir)
-                self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=False)
-                self._chdir(self.work_dir)
+            logger.warning(
+                "当前使用 SukiSU susfs-main 集成分支，已忽略 KernelSU commit hash，"
+                "不要再 checkout 到 0ca744a，否则会把 susfs-main 覆盖掉。"
+            )
 
     def add_bbg(self):
         if not self.config.use_bbg:
@@ -326,7 +337,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write(content)
 
     def apply_susfs_patches(self):
-        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 + KernelSU integration ===")
+        logger.info("=== 应用 SUSFS 补丁 - strict v2.1.0 + SukiSU susfs-main integration ===")
 
         self._verify_susfs_source_version()
 
@@ -384,113 +395,63 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if patched_version != "v2.1.0":
             raise RuntimeError(f"补丁后的 SUSFS_VERSION 错误：{patched_version}，目标必须是 v2.1.0")
 
-        # 3. 关键修复：应用 KernelSU/SukiSU 侧 SUSFS 启用补丁。
-        #    如果漏掉这里，最终刷入后 ksu_susfs 仍可能检测成 v1.5.2。
-        ksu_patch_dir = self.susfs_dir / "kernel_patches/KernelSU"
-        if not ksu_patch_dir.exists():
-            raise RuntimeError(f"SUSFS KernelSU 补丁目录不存在: {ksu_patch_dir}")
-
-        ksu_patches = sorted(ksu_patch_dir.glob("*.patch"))
-        if not ksu_patches:
-            raise RuntimeError(f"SUSFS KernelSU 补丁目录里没有 patch: {ksu_patch_dir}")
+        # 3. 当前使用 SukiSU Ultra 的 susfs-main 集成分支。
+        #    不再应用 susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch。
+        #    原因：该 patch 基于原版 KernelSU，当前 SukiSU Ultra 会在
+        #    kernel/core/init.c 和 kernel/policy/app_profile.c 产生关键 .rej。
+        logger.info("=== 跳过外部 KernelSU SUSFS patch，改用 SukiSU susfs-main 自带集成 ===")
 
         self._chdir(ksu_dir)
 
-        for p in ksu_patches:
-            logger.info(f"应用 KernelSU SUSFS 补丁: {p.name}")
-
-            # SukiSU Ultra 的 KernelSU 目录和原版 KernelSU 不完全一致，
-            # 10_enable_susfs_for_ksu.patch 可能在 kernel/supercall 这种 SUS_SU 相关路径失败。
-            # 这里不直接放行，而是先尽量应用，再由后面的 Kconfig/init 强制检查决定能不能继续。
-            result = self._run_cmd(
-                f"patch -p1 --fuzz=3 --forward < {p}",
-                check=False,
-                capture_output=True
-            )
-
-            if result.returncode != 0:
-                logger.warning(f"KernelSU SUSFS 补丁返回非 0，继续检查关键接入点: {p.name}")
-                if result.stdout:
-                    logger.warning(result.stdout)
-                if result.stderr:
-                    logger.warning(result.stderr)
-
-        ksu_reject_files = list(ksu_dir.rglob("*.rej"))
-
-        critical_rejects = []
-        noncritical_rejects = []
-
-        for rej in ksu_reject_files:
-            rel = str(rej.relative_to(ksu_dir))
-
-            # 这些一般属于 SUS_SU / supercall 相关路径。
-            # 当前配置里 CONFIG_KSU_SUSFS_SUS_SU=n，所以先按非关键处理。
-            if (
-                "kernel/supercall/" in rel
-                or "sus_su" in rel
-                or "sucompat" in rel
-            ):
-                noncritical_rejects.append(rej)
-            else:
-                critical_rejects.append(rej)
-
-        if critical_rejects:
-            reject_list = "\n".join(str(p) for p in critical_rejects[:50])
-            raise RuntimeError(f"SUSFS KernelSU 补丁存在关键失败片段 .rej，禁止继续构建:\n{reject_list}")
-
-        if noncritical_rejects:
-            logger.warning("发现 SUS_SU/supercall 相关非关键 .rej，当前 CONFIG_KSU_SUSFS_SUS_SU=n，先忽略：")
-            for rej in noncritical_rejects[:50]:
-                logger.warning(f"  忽略非关键 reject: {rej}")
-                try:
-                    rej.unlink()
-                except Exception:
-                    pass
-
-        # 4. 强制检查 KernelSU/SukiSU 侧是否真的接入 SUSFS。
-        ksu_kconfig_candidates = [
-            ksu_dir / "kernel/Kconfig",
-            ksu_dir / "kernel/Kconfig.legacy",
-        ]
-
-        ksu_init_candidates = [
-            ksu_dir / "kernel/core/init.c",
-            ksu_dir / "kernel/core_hook.c",
-            ksu_dir / "kernel/kernel.c",
-        ]
-
-        ksu_kconfig = next((p for p in ksu_kconfig_candidates if p.exists()), None)
-        if not ksu_kconfig:
+        # 确保没有残留 .rej。只要有 .rej，说明源码被失败补丁污染，禁止继续。
+        leftover_rejects = list(ksu_dir.rglob("*.rej"))
+        if leftover_rejects:
+            reject_list = "\n".join(str(p) for p in leftover_rejects[:50])
             raise RuntimeError(
-                "找不到 KernelSU Kconfig，已检查:\n"
-                + "\n".join(str(p) for p in ksu_kconfig_candidates)
+                "KernelSU 目录存在旧的 .rej 残留，请清理工作区后重新构建，禁止继续：\n"
+                + reject_list
             )
 
-        with open(ksu_kconfig, "r", encoding="utf-8", errors="ignore") as f:
-            kconfig_content = f.read()
+        # 4. 强制检查 SukiSU susfs-main 是否真的带了 SUSFS Kconfig。
+        kconfig_files = list(ksu_dir.rglob("Kconfig*"))
+        if not kconfig_files:
+            raise RuntimeError(f"KernelSU 目录里找不到任何 Kconfig 文件: {ksu_dir}")
 
-        if "config KSU_SUSFS" not in kconfig_content and "KSU_SUSFS" not in kconfig_content:
-            raise RuntimeError(f"{ksu_kconfig} 里没有 KSU_SUSFS，KernelSU SUSFS 补丁没有真正生效")
+        kconfig_hit = False
+        ksu_kconfig = None
 
+        for candidate in kconfig_files:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            if "KSU_SUSFS" in content:
+                kconfig_hit = True
+                ksu_kconfig = candidate
+                break
+
+        if not kconfig_hit:
+            raise RuntimeError(
+                "SukiSU susfs-main 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
+                "说明没有真正切到 susfs-main，或者 setup.sh 没拉到带 SUSFS 的分支。"
+            )
+
+        # 5. 强制检查是否存在 susfs_init 接入。
         init_hit = False
         init_hit_file = None
 
-        for candidate in ksu_init_candidates:
-            if not candidate.exists():
-                continue
-
+        for candidate in ksu_dir.rglob("*.c"):
             with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
-                init_content = f.read()
+                content = f.read()
 
-            if "susfs_init" in init_content:
+            if "susfs_init" in content:
                 init_hit = True
                 init_hit_file = candidate
                 break
 
         if not init_hit:
             raise RuntimeError(
-                "没有在 KernelSU/SukiSU 初始化源码里找到 susfs_init，SUSFS 初始化没有真正接入。已检查:\n"
-                + "\n".join(str(p) for p in ksu_init_candidates)
+                "SukiSU susfs-main 检查失败：KernelSU 源码里没有找到 susfs_init。"
+                "说明 SUSFS 初始化没有真正接入，禁止继续生成包。"
             )
 
         logger.info(f"KernelSU SUSFS Kconfig check passed: {ksu_kconfig}")
@@ -498,7 +459,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         logger.info("=== KernelSU SUSFS integration check passed ===")
 
         self._chdir(self.work_dir)
-        logger.info("=== SUSFS v2.1.0 + KernelSU integration 补丁应用完成 ===")
+        logger.info("=== SUSFS v2.1.0 + SukiSU susfs-main integration 补丁应用完成 ===")
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
