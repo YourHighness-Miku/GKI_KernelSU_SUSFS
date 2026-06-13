@@ -878,3 +878,72 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self._run_cmd("gzip -n -k -f -9 Image", check=False)
 
         for kernel_file, output_file in [("Image", "boot.img"), ("Image.gz", "boot-gz.img"), ("Image.lz4", "boot-lz4.img")]:
+            kernel_path = bootimgs_dir / kernel_file
+            if not kernel_path.exists():
+                continue
+            cmd = f"$MKBOOTIMG --header_version 4 --kernel {kernel_file} --output {output_file}"
+            if has_ramdisk:
+                cmd += f" --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level {self.config.os_patch_level}"
+            self._run_cmd(cmd, check=False)
+            self._run_cmd(f"$AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image {output_file} --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH", check=False)
+            dest = self.work_dir / f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}-{output_file}"
+            self._run_cmd(f"cp {output_file} {dest}", check=False)
+            artifacts.append(str(dest))
+
+    def create_anykernel_zips(self) -> list:
+        logger.info("=== 创建 AnyKernel3 ZIP 文件 ===")
+        self._chdir(self.work_dir)
+        artifacts = []
+        ak3_dir = self.anykernel_dir
+
+        for suffix in ["", "-lz4", "-gz"]:
+            image_file = f"Image{suffix}"
+            image_path = self.work_dir / image_file
+            if not image_path.exists():
+                continue
+            zip_name = f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}-AnyKernel3{suffix}.zip"
+            self._run_cmd(f"cp {image_path} {ak3_dir}/", check=False)
+            self._chdir(ak3_dir)
+            self._run_cmd(f"zip -r ../{zip_name} ./*", check=False)
+            self._run_cmd(f"rm {ak3_dir}/{image_file}", check=False)
+            artifacts.append(str(self.work_dir / zip_name))
+            self._chdir(self.work_dir)
+        return artifacts
+
+    def build(self) -> BuildResult:
+        import time
+        start_time = time.time()
+        logger.info("=" * 50)
+        logger.info(f"开始 GKI Kernel 构建 - {self.config.config_name}")
+        logger.info("=" * 50)
+
+        try:
+            self.clone_repositories()
+            self.clone_toolchain()
+            self.setup_repo_tool()
+            self.init_and_sync_kernel()
+            self.add_kernel_supatch()
+            self.add_kernelsu()
+            self.add_bbg()
+            self.apply_susfs_patches()
+            self.apply_sukisu_patches()
+            self.apply_zram_patches()
+            self.apply_task_mmu_fixes()
+            self.configure_kernel()
+            self.configure_kernel_name()
+            self.show_kernel_config()
+
+            if not self.build_kernel():
+                return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
+
+            self.patch_kpm_image()
+            artifacts = []
+            artifacts.extend(self.prepare_boot_images())
+            artifacts.extend(self.create_anykernel_zips())
+
+            build_time = time.time() - start_time
+            logger.info(f"构建成功! 耗时: {build_time:.2f} 秒, 生成 {len(artifacts)} 个产物")
+            return BuildResult(success=True, config=self.config, message="构建成功", artifacts=artifacts, build_time=build_time)
+        except Exception as e:
+            logger.error(f"构建过程出错: {e}")
+            return BuildResult(success=False, config=self.config, message=str(e), build_time=time.time() - start_time)
