@@ -303,10 +303,28 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
     def apply_sukisu_patches(self):
         logger.info("=== 应用 SukiSU 补丁 ===")
+
+        # android14-6.1.138 下，SukiSU_patch 的 69_hide_stuff.patch
+        # 会在 fs/proc/task_mmu.c 里留下未使用的 dentry 变量和 bypass 标签：
+        #   error: unused variable 'dentry'
+        #   error: unused label 'bypass'
+        # 这会被 -Werror 当成编译失败。
+        #
+        # 这个补丁只改 proc maps 隐藏相关逻辑，不是下列核心目标的必要补丁：
+        # SUSFS v2.1.0 / Manual Syscall Hooks / Magic Mount / BBR / KPM / LZ4KD。
+        # 所以在 android14-6.1.138 上跳过它，避免破坏编译。
+        if (
+            self.config.android_version == "android14"
+            and self.config.kernel_version == "6.1"
+            and self.config.get_sub_level_int() == 138
+        ):
+            logger.info("跳过 69_hide_stuff.patch：android14-6.1.138 会触发 task_mmu.c unused dentry/bypass 编译失败")
+            return
+
         self._chdir(self.work_dir / "common")
         hooks_patch = self.sukisu_patch_dir / "69_hide_stuff.patch"
         if hooks_patch.exists():
-            self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=False)
+            self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=True)
 
     def apply_zram_patches(self):
         if not self.config.use_zram:
