@@ -311,21 +311,46 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
     def apply_zram_patches(self):
         if not self.config.use_zram:
             return
-        logger.info("=== 应用 ZRAM (LZ4KD) 补丁 ===")
-        self._chdir(self.work_dir / "common")
-        for src in [
-            (self.sukisu_patch_dir / "other/zram/lz4k/include/linux", "include/linux/"),
-            (self.sukisu_patch_dir / "other/zram/lz4k/lib", "lib/"),
-            (self.sukisu_patch_dir / "other/zram/lz4k/crypto", "crypto/"),
-            (self.sukisu_patch_dir / "other/zram/lz4k_oplus", "lib/"),
-        ]:
-            if src[0].exists():
-                self._run_cmd(f"cp -r {src[0]}/* {src[1]}", check=False)
-        zram_patch_dir = self.sukisu_patch_dir / f"other/zram/zram_patch/{self.config.kernel_version}"
-        for patch in ["lz4kd.patch", "lz4k_oplus.patch"]:
-            p = zram_patch_dir / patch
-            if p.exists():
-                self._run_cmd(f"patch -p1 -F 3 < {p}", check=False)
+        logger.info("=== 应用 ZRAM (LZ4KD) 补丁 - safe fix ===")
+        common_dir = self.work_dir / "common"
+        zram_root = self.sukisu_patch_dir / "other/zram"
+        self._chdir(common_dir)
+
+        # 关键修复：
+        # 原脚本把 other/zram/lz4k/lib/* 直接复制到 common/lib/
+        # 会覆盖 AOSP 原始 lib/Kconfig 和 lib/Makefile，
+        # 导致 HAS_IOMEM、ASSOCIATIVE_ARRAY 等基础配置丢失，最后编译失败。
+        # 这里只复制新增源码，不覆盖原始 Kconfig / Makefile。
+        safe_copy_jobs = [
+            (zram_root / "lz4k/include/linux", common_dir / "include/linux"),
+            (zram_root / "lz4k/lib/lz4k",      common_dir / "lib/lz4k"),
+            (zram_root / "lz4k/crypto/lz4k.c",  common_dir / "crypto/lz4k.c"),
+        ]
+        for src, dst in safe_copy_jobs:
+            if not src.exists():
+                logger.warning(f"ZRAM source missing, skip: {src}")
+                continue
+            if src.is_dir():
+                self._run_cmd(f"mkdir -p {dst} && cp -r {src}/* {dst}/", check=True)
+            else:
+                self._run_cmd(f"cp {src} {dst}", check=True)
+
+        # OPlus LZ4KD 源码作为独立目录复制到 lib/ 下，
+        # 不把里面的内容摊平到 common/lib/，避免覆盖 lib/Kconfig / lib/Makefile。
+        oplus_src = zram_root / "lz4k_oplus"
+        if oplus_src.exists():
+            self._run_cmd(f"cp -r {oplus_src} {common_dir}/lib/", check=True)
+        else:
+            logger.warning(f"ZRAM OPlus source missing, skip: {oplus_src}")
+
+        # 应用 LZ4KD 接入补丁。
+        # 必须 check=True，补丁失败就立刻停止，不能带着坏源码继续编译。
+        zram_patch_dir = zram_root / f"zram_patch/{self.config.kernel_version}"
+        for patch_name in ["lz4kd.patch", "lz4k_oplus.patch"]:
+            patch_file = zram_patch_dir / patch_name
+            if not patch_file.exists():
+                raise RuntimeError(f"缺少 ZRAM/LZ4KD 补丁: {patch_file}")
+            self._run_cmd(f"patch -p1 -F 3 < {patch_file}", check=True)
 
     def apply_task_mmu_fixes(self):
         logger.info("=== 应用 task_mmu.c 修复 ===")
@@ -518,25 +543,25 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         logger.info("=== 显示内核配置列表 ===")
         self._chdir(self.work_dir)
         config_file = self.work_dir / "common/arch/arm64/configs/gki_defconfig"
-        
+
         if not config_file.exists():
             logger.warning(f"配置文件不存在: {config_file}")
             return
-        
+
         with open(config_file, "r") as f:
             lines = f.readlines()
-        
+
         config_lines = [line.strip() for line in lines if line.strip().startswith("CONFIG_")]
-        
+
         key_configs = {
             "CONFIG_KSU": "KernelSU",
             "CONFIG_KPM": "KPM",
             "CONFIG_KSU_SUSFS": "SUSFS",
             "CONFIG_BBG": "Baseband-guard",
-            "CONFIG_BBR": "BBR",
+            "CONFIG_TCP_CONG_BBR": "BBR",
             "CONFIG_ZRAM": "ZRAM",
         }
-        
+
         logger.info("关键配置状态:")
         for prefix, name in key_configs.items():
             found = [c for c in config_lines if c.startswith(prefix)]
@@ -548,15 +573,14 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             if found:
                 for f in sorted(found):
                     logger.info(f"      -> {f}")
-        
-        # 显示 ZRAM 相关配置
+
         if self.config.use_zram:
             zram_configs = [c for c in config_lines if any(x in c for x in ["ZRAM", "ZSMALLOC", "LZ4", "LZ4KD", "CRYPTO_LZ4", "MODULE_SIG"])]
             if zram_configs:
                 logger.info("ZRAM 相关配置:")
                 for zc in sorted(zram_configs):
                     logger.info(f"  -> {zc}")
-        
+
         logger.info("-" * 60)
 
     def build_kernel(self) -> bool:
