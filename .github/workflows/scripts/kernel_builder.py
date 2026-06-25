@@ -152,7 +152,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         repos = [
             ("SUSFS", self.susfs_dir, SUSFS_REPO_CONFIG['repo_url'], self.config.kernel_branch),
-            ("SukiSU Patch", self.sukisu_patch_dir, SUKISU_PATCH_REPO_CONFIG['repo_url'], None),
+            ("ReSukiSU/SukiSU Patch", self.sukisu_patch_dir, SUKISU_PATCH_REPO_CONFIG['repo_url'], None),
             ("AnyKernel3", self.anykernel_dir, ANYKERNEL_CONFIG['repo_url'], ANYKERNEL_CONFIG['branch']),
             ("Kernel Patches", self.kernel_patches_dir, KERNEL_PATCHES_CONFIG['repo_url'], None),
         ]
@@ -290,13 +290,13 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write("obj-y += hmbird_patch.o\n")
 
     def add_kernelsu(self):
-        logger.info("=== 添加 SukiSU Ultra KernelSU - builtin with SUSFS check ===")
+        logger.info("=== 添加 ReSukiSU KernelSU - builtin with SUSFS check ===")
         self._chdir(self.work_dir)
 
-        # 使用 SukiSU Ultra 官方 builtin。
+        # 使用 ReSukiSU 官方 builtin。
         # 不再使用 susfs-main。
         # 不再 checkout 用户填的 KernelSU commit hash，避免把 builtin 覆盖回旧提交。
-        setup_url = "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
+        setup_url = "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh"
 
         # 清理旧 KernelSU，避免上一次失败构建残留污染。
         self._run_cmd("rm -rf KernelSU", check=False)
@@ -305,7 +305,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         ksu_dir = self.work_dir / "KernelSU"
         if not ksu_dir.exists():
-            raise RuntimeError(f"SukiSU builtin 安装后 KernelSU 目录不存在: {ksu_dir}")
+            raise RuntimeError(f"ReSukiSU builtin 安装后 KernelSU 目录不存在: {ksu_dir}")
 
         self._chdir(ksu_dir)
 
@@ -315,7 +315,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         # 立刻检查 KSU_SUSFS，防止跑到后面才失败。
         kconfig_files = list(ksu_dir.rglob("Kconfig*"))
         if not kconfig_files:
-            raise RuntimeError(f"SukiSU builtin 检查失败：KernelSU 目录里没有 Kconfig 文件: {ksu_dir}")
+            raise RuntimeError(f"ReSukiSU builtin 检查失败：KernelSU 目录里没有 Kconfig 文件: {ksu_dir}")
 
         kconfig_hit = False
         kconfig_hit_file = None
@@ -331,17 +331,17 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if not kconfig_hit:
             raise RuntimeError(
-                "SukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
-                "说明 builtin 分支也没有拉到带 SUSFS 的 KernelSU，禁止继续生成包。"
+                "ReSukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
+                "说明 ReSukiSU builtin 分支没有拉到带 SUSFS 的 KernelSU，禁止继续生成包。"
             )
 
-        logger.info(f"SukiSU builtin KSU_SUSFS check passed: {kconfig_hit_file}")
+        logger.info(f"ReSukiSU builtin KSU_SUSFS check passed: {kconfig_hit_file}")
 
         self._chdir(self.work_dir)
 
         if self.config.kernelsu_commit:
             logger.warning(
-                "当前使用 SukiSU builtin 分支，已忽略 KernelSU commit hash。"
+                "当前使用 ReSukiSU builtin 分支，已忽略 KernelSU commit hash。"
                 "Run workflow 页面必须把 KernelSU commit hash 清空，不要填 0ca744a。"
             )
 
@@ -369,7 +369,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 f.write(content)
 
     def apply_susfs_patches(self):
-        logger.info("=== 应用 SUSFS 补丁 - strict v2.2.0 + SukiSU builtin integration ===")
+        logger.info("=== 应用 SUSFS 补丁 - strict v2.2.0 + ReSukiSU builtin integration ===")
 
         self._verify_susfs_source_version()
 
@@ -427,10 +427,10 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if patched_version != "v2.2.0":
             raise RuntimeError(f"补丁后的 SUSFS_VERSION 错误：{patched_version}，目标必须是 v2.2.0")
 
-        # 3. 当前使用 SukiSU Ultra builtin。
+        # 3. 当前使用 ReSukiSU builtin。
         #    不再应用 susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch。
-        #    原因：外部 KernelSU patch 会在当前 SukiSU Ultra 的 init.c / app_profile.c 产生关键 .rej。
-        logger.info("=== 跳过外部 KernelSU SUSFS patch，改用 SukiSU builtin 自带集成检查 ===")
+        #    原因：外部 KernelSU patch 会在当前 ReSukiSU 的 init.c / app_profile.c 产生关键 .rej。
+        logger.info("=== 跳过外部 KernelSU SUSFS patch，改用 ReSukiSU builtin 自带集成检查 ===")
 
         self._chdir(ksu_dir)
 
@@ -443,7 +443,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 + reject_list
             )
 
-        # 4. 强制检查 SukiSU builtin 是否真的带了 SUSFS Kconfig。
+        # 4. 强制检查 ReSukiSU builtin 是否真的带了 SUSFS Kconfig。
         kconfig_files = list(ksu_dir.rglob("Kconfig*"))
         if not kconfig_files:
             raise RuntimeError(f"KernelSU 目录里找不到任何 Kconfig 文件: {ksu_dir}")
@@ -462,7 +462,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if not kconfig_hit:
             raise RuntimeError(
-                "SukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
+                "ReSukiSU builtin 检查失败：KernelSU Kconfig 里没有 KSU_SUSFS。"
                 "说明没有真正拉到带 SUSFS 的 builtin 分支，禁止继续生成包。"
             )
 
@@ -481,7 +481,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if not init_hit:
             raise RuntimeError(
-                "SukiSU builtin 检查失败：KernelSU 源码里没有找到 susfs_init。"
+                "ReSukiSU builtin 检查失败：KernelSU 源码里没有找到 susfs_init。"
                 "说明 SUSFS 初始化没有真正接入，禁止继续生成包。"
             )
 
@@ -490,12 +490,12 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         logger.info("=== KernelSU SUSFS integration check passed ===")
 
         self._chdir(self.work_dir)
-        logger.info("=== SUSFS v2.2.0 + SukiSU builtin integration 补丁应用完成 ===")
+        logger.info("=== SUSFS v2.2.0 + ReSukiSU builtin integration 补丁应用完成 ===")
 
     def apply_sukisu_patches(self):
-        logger.info("=== 应用 SukiSU 补丁 ===")
+        logger.info("=== 应用 ReSukiSU 兼容补丁 ===")
 
-        # android14-6.1.138 下，SukiSU_patch 的 69_hide_stuff.patch
+        # android14-6.1.138 下，ReSukiSU 兼容补丁仓库中的 69_hide_stuff.patch
         # 会在 fs/proc/task_mmu.c 里留下未使用的 dentry 变量和 bypass 标签：
         #   error: unused variable 'dentry'
         #   error: unused label 'bypass'
