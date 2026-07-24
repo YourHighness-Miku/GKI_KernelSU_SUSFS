@@ -51,6 +51,45 @@ class BuilderMix5:
             raise RuntimeError("defconfig 门禁失败:\n - " + "\n - ".join(problems))
         logger.info("defconfig 门禁通过（KPM/BBR/ZRAM 与开关一致）")
 
+    def verify_final_config_gki_invariants(self):
+        """GKI 兼容性不变量门禁：确认小米 14 Ultra(aurora) 需要的基础能力未被破坏。
+
+        这些多来自 ACK gki_defconfig 默认；此处显式核对，防止我们追加的配置意外覆盖/回归。
+        KSU 依赖 KPROBES && EXT4_FS，否则 CONFIG_KSU 会静默失效。
+        """
+        # 用最终生效的 .config（若存在）优先，回退到 defconfig。
+        cfg_candidates = [
+            self.work_dir / "out" / f"{self.config.android_version}-{self.config.kernel_version}" / ".config",
+            self.work_dir / "common" / ".config",
+            self.work_dir / "common/arch/arm64/configs/gki_defconfig",
+        ]
+        cfg = next((c for c in cfg_candidates if c.exists()), None)
+        if cfg is None:
+            logger.warning("未找到 .config/defconfig，跳过 GKI 不变量门禁")
+            return
+        text = cfg.read_text(errors="ignore")
+
+        def on(sym):
+            return f"{sym}=y" in text
+
+        # KSU 依赖项 + 设备基础能力。SELINUX/EXT4/KPROBES/4K 缺失即拒绝。
+        required_y = [
+            "CONFIG_KSU",
+            "CONFIG_KPROBES",       # KSU 依赖
+            "CONFIG_EXT4_FS",       # KSU 依赖
+            "CONFIG_ARM64_4K_PAGES",
+            "CONFIG_SECURITY_SELINUX",
+            "CONFIG_OVERLAY_FS",
+        ]
+        missing = [s for s in required_y if not on(s)]
+        # ZRAM 开启时 SWAP 也应在（zram 作为 swap backend）。
+        if self.config.use_zram and not on("CONFIG_SWAP"):
+            missing.append("CONFIG_SWAP")
+        if missing:
+            raise RuntimeError("GKI 不变量门禁失败，缺少: " + ", ".join(missing) +
+                               f"（来源: {cfg}）")
+        logger.info(f"GKI 不变量门禁通过（KSU/KPROBES/EXT4/4K/SELINUX/OverlayFS，来源 {cfg.name}）")
+
     def patch_kpm_image(self):
         if not self.config.use_kpm or self.config.kernel_version == "6.6":
             logger.info("未启用 KPM 或 6.6，跳过 KPM 修补")
