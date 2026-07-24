@@ -6,35 +6,60 @@ import urllib.request
 import ssl
 
 
-def get_susfs_version() -> str:
-    """从 susfs 仓库获取版本号"""
+def get_susfs_version(branch: Optional[str] = None) -> str:
+    """从 susfs 仓库获取版本号。
+
+    - 使用正常的 TLS 证书校验（不再关闭 check_hostname / 不再用 CERT_NONE）。
+    - 网络失败时抛出异常，绝不返回硬编码的假版本号。
+    真正用于门禁的版本号来自 KernelBuilder._verify_susfs_source_version()，
+    它读取实际 checkout 出来的 susfs.h；这里只用于展示/矩阵摘要。
+    """
+    # 使用系统默认 CA，进行完整证书校验。
     ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
 
     # 尝试多个分支获取版本号
-    branches = ["gki-android15-6.6", "gki-android14-6.1", "gki-android13-5.15", "gki-android12-5.10", "main"]
+    if branch:
+        branches = [branch]
+    else:
+        branches = ["gki-android15-6.6", "gki-android14-6.1", "gki-android13-5.15", "gki-android12-5.10", "main"]
     version_pattern = re.compile(r'#define\s+SUSFS_VERSION\s+"([^"]+)"')
 
-    for branch in branches:
+    last_error: Optional[Exception] = None
+    for b in branches:
         try:
-            url = f"https://raw.githubusercontent.com/ShirkNeko/susfs4ksu/{branch}/kernel_patches/include/linux/susfs.h"
+            url = f"https://raw.githubusercontent.com/ShirkNeko/susfs4ksu/{b}/kernel_patches/include/linux/susfs.h"
             req = urllib.request.Request(url, headers={'User-Agent': 'Python'})
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as response:
                 content = response.read().decode('utf-8')
                 match = version_pattern.search(content)
                 if match:
                     return match.group(1)
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - 记录后继续尝试下一个分支
+            last_error = e
             continue
 
-    # 如果获取失败，返回默认值
-    return "v2.2.0"
+    raise RuntimeError(
+        "无法从 susfs4ksu 获取 SUSFS_VERSION（已尝试分支: "
+        f"{', '.join(branches)}）。最后错误: {last_error}. "
+        "拒绝返回硬编码版本号；请检查网络或分支名。"
+    )
 
 
-# 内核版本号 - 从 susfs 仓库自动获取
-KERNEL_VERSION = get_susfs_version()
-print(f"SUSFS Version: {KERNEL_VERSION}")
+def get_susfs_version_safe(branch: Optional[str] = None, default: str = "unknown") -> str:
+    """展示用的安全封装：失败时返回占位符而不是崩溃，且绝不谎报具体版本。"""
+    try:
+        return get_susfs_version(branch)
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] 获取 SUSFS 版本失败，使用占位符 '{default}': {e}")
+        return default
+
+
+# 内核版本号 - 从 susfs 仓库自动获取（展示用；真正门禁在构建时读实际源码）
+KERNEL_VERSION = get_susfs_version_safe()
+print(f"SUSFS Version (display): {KERNEL_VERSION}")
+
+# 期望的 SUSFS 版本（构建门禁用，读实际 checkout 出的 susfs.h 校验）
+EXPECTED_SUSFS_VERSION = "v2.2.0"
 
 
 class AndroidVersion(Enum):
@@ -64,9 +89,30 @@ ANDROID_KERNEL_MAP = {
 }
 
 # 仓库配置
+# SukiSU-Ultra 固定到稳定 tag，避免浮动 main 导致 manager/driver 版本漂移。
+# v4.1.3 = 0ca744a88835144c58d8256ebb32c279edabfcde（含 post-fs-data 注销 input kprobe 的安全模式修复）。
+SUKISU_PIN_REF = "v4.1.3"
+SUKISU_PIN_COMMIT = "0ca744a88835144c58d8256ebb32c279edabfcde"
+
 KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
                     "branch": "main",
-                    "setup_script": "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"}
+                    "pin_ref": SUKISU_PIN_REF,
+                    "pin_commit": SUKISU_PIN_COMMIT,
+                    "setup_script": f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/{SUKISU_PIN_COMMIT}/kernel/setup.sh"}
+
+# ACK（Android Common Kernel）精确来源固定表。
+# key = "{android_version}-{kernel_version}.{sub_level}"
+# 每项给出：真实存在的 manifest 分支 + 精确 tag + 该 tag 对应 commit（用于校验，非编造）。
+# 6.1.138 已联网核验：manifest common-android14-6.1 存在；tag android14-6.1.138_r00 的
+# Makefile SUBLEVEL == 138，commit = 4894546596ee3a4b96d9f2157de0d197826cabc0。
+ACK_SOURCE_PINS = {
+    "android14-6.1.138": {
+        "manifest_branch": "common-android14-6.1",
+        "ack_tag": "android14-6.1.138_r00",
+        "ack_commit": "4894546596ee3a4b96d9f2157de0d197826cabc0",
+        "expected_sublevel": 138,
+    },
+}
 
 # SUSFS 仓库配置
 SUSFS_REPO_CONFIG = {"repo_url": "https://github.com/ShirkNeko/susfs4ksu.git"}
@@ -82,6 +128,7 @@ KERNEL_PATCHES_CONFIG = {"repo_url": "https://github.com/Tools-cx-app/kernel_pat
 
 # Baseband-guard 配置
 BBG_CONFIG = {"repo_url": "https://github.com/vc-teahouse/Baseband-guard.git",
+              "pin_commit": "1c664957da7539de860503940ee73c7447f1dfaf",
               "setup_script": "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh"}
 
 # 工具链配置
@@ -167,7 +214,13 @@ class BuildConfig:
     def get_sub_level_int(self) -> Optional[int]:
         return None if self.sub_level == "X" else int(self.sub_level)
 
+    def ack_pin(self) -> Optional[dict]:
+        """返回本配置对应的 ACK 精确来源固定项（若表中存在）。"""
+        key = f"{self.android_version}-{self.kernel_version}.{self.sub_level}"
+        return ACK_SOURCE_PINS.get(key)
+
     def to_dict(self) -> dict:
+        pin = self.ack_pin()
         return {
             "android_version": self.android_version,
             "kernel_version": self.kernel_version,
@@ -175,6 +228,15 @@ class BuildConfig:
             "os_patch_level": self.os_patch_level,
             "kernelsu_version": self.kernelsu_version,
             "kernelsu_commit": self.kernelsu_commit,
+            # 固定的 SukiSU 来源（用于 release / manifest / 一致性核对）
+            "sukisu_pin_ref": SUKISU_PIN_REF,
+            "sukisu_pin_commit": SUKISU_PIN_COMMIT,
+            # 修复 八.2：susfs_commit 必须进入 dict → cache key / release / manifest
+            "susfs_commit": self.susfs_commit,
+            # 固定的 ACK 来源（若有）
+            "ack_manifest_branch": pin["manifest_branch"] if pin else None,
+            "ack_tag": pin["ack_tag"] if pin else None,
+            "ack_commit": pin["ack_commit"] if pin else None,
             "use_zram": self.use_zram,
             "use_kpm": self.use_kpm,
             "use_bbg": self.use_bbg,
