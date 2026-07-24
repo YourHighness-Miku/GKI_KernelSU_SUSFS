@@ -41,6 +41,7 @@ DEFAULT_BUILD_MATRIX = {
         {"sub_level": "90", "os_patch_level": "2024-08"},
         {"sub_level": "99", "os_patch_level": "2024-10"},
         {"sub_level": "124", "os_patch_level": "2025-02"},
+        {"sub_level": "138", "os_patch_level": "2026-02"},
         {"sub_level": "145", "os_patch_level": "2025-09"},
     ],
     "android15-6.6": [
@@ -155,6 +156,7 @@ def build_matrix(matrix_key: str, args: argparse.Namespace, workspace: str) -> l
                 os_patch_level=cfg_data["os_patch_level"],
                 kernelsu_version=args.ksu_version,
                 kernelsu_commit=args.ksu_commit,
+                susfs_commit=args.susfs_commit,
                 use_zram=args.zram,
                 use_kpm=not args.no_kpm,
                 use_bbg=args.bbg,
