@@ -1,0 +1,41 @@
+stock-vs-final-config.diff (逻辑增量，非逐行 diff)
+==================================================
+基线: 官方 boot.img 内嵌 IKCONFIG 提取的 stock .config（stock-boot-kernel.config, Linux/arm64 6.1.138）。
+目标: 构建器在 gki_defconfig 之上追加/修改的配置。最终以正式编译产物 Image 内嵌 IKCONFIG 复核为准。
+图例:  - 官方值   + 本构建值
+
+# === 保持不变（官方即满足，构建器仅做不变量门禁核对）===
+  CONFIG_ARM64_4K_PAGES=y / CONFIG_SECURITY_SELINUX=y / CONFIG_SWAP=y / CONFIG_OVERLAY_FS=y
+  CONFIG_EXT4_FS=y / CONFIG_KPROBES=y / CONFIG_TUN=y / CONFIG_NET_SCH_FQ=y
+  CONFIG_TCP_CONG_CUBIC=y / CONFIG_IKCONFIG=y
+
+# === KernelSU / SukiSU（官方无，全部新增）===
++ CONFIG_KSU=y
++ CONFIG_KSU_SUSFS_SUS_SU=n
++ CONFIG_KPM=y   # 仅在 use_kpm 时
+
+# === SUSFS v2.2.0（官方无，全部新增，节选）===
++ CONFIG_KSU_SUSFS=y / CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y / CONFIG_KSU_SUSFS_SUS_MOUNT=y
++ CONFIG_KSU_SUSFS_SUS_KSTAT=y / CONFIG_KSU_SUSFS_TRY_UMOUNT=y / CONFIG_KSU_SUSFS_SPOOF_UNAME=y
++ CONFIG_KSU_SUSFS_ENABLE_LOG=y / CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
++ CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y / CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+  （完整清单见 kernel_builder.py: KERNEL_CONFIG_TEMPLATE）
+
+# === ZRAM / LZ4KD ===
+- CONFIG_ZRAM=m               + CONFIG_ZRAM=y
+- CONFIG_ZSMALLOC=m           + CONFIG_ZSMALLOC=y
+- CONFIG_ZRAM_DEF_COMP="lzo-rle"  + CONFIG_ZRAM_DEF_COMP="lz4kd"
++ CONFIG_ZRAM_DEF_COMP_LZ4KD=y / CONFIG_CRYPTO_LZ4KD=y / CONFIG_CRYPTO_LZ4K=y
++ CONFIG_CRYPTO_LZ4HC=y / CONFIG_CRYPTO_842=y / CONFIG_ZRAM_WRITEBACK=y / CONFIG_MODULE_SIG_FORCE=n
+
+# === BBR ===
+- # CONFIG_TCP_CONG_ADVANCED is not set   + CONFIG_TCP_CONG_ADVANCED=y
++ CONFIG_TCP_CONG_BBR=y
+- CONFIG_DEFAULT_TCP_CONG="cubic"          + CONFIG_DEFAULT_TCP_CONG="bbr"
++ CONFIG_DEFAULT_BBR=y
+
+# === 未启用（按需求保持关闭）===
+  Baseband-guard(BBG) use_bbg=False；OnePlus 8E use_op8e=False；多套 hook 冲突：无（SUS_SU=n）
+
+备注: 正式编译后用 scripts/extract-ikconfig <本次Image> > final-config.txt，
+     再 diff stock-boot-kernel.config final-config.txt 得逐行 diff（【需正式编译后生成】）。
