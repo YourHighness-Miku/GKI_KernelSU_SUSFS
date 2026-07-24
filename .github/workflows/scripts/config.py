@@ -28,13 +28,12 @@ def get_susfs_version(branch: Optional[str] = None) -> str:
     for b in branches:
         try:
             url = f"https://raw.githubusercontent.com/ShirkNeko/susfs4ksu/{b}/kernel_patches/include/linux/susfs.h"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Python'})
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as response:
-                content = response.read().decode('utf-8')
-                match = version_pattern.search(content)
-                if match:
-                    return match.group(1)
-        except Exception as e:  # noqa: BLE001 - 记录后继续尝试下一个分支
+            with urllib.request.urlopen(url, timeout=10, context=ssl_ctx) as resp:
+                content = resp.read().decode("utf-8", errors="ignore")
+            m = version_pattern.search(content)
+            if m:
+                return m.group(1)
+        except Exception as e:  # noqa: BLE001
             last_error = e
             continue
 
@@ -115,6 +114,12 @@ ACK_SOURCE_PINS = {
 }
 
 # SUSFS 仓库配置
+# 默认固定到 android14-6.1 分支上 v2.2.0 的真实 commit，避免默认使用浮动分支 HEAD。
+# 090cf40 已联网核验：susfs.h SUSFS_VERSION == "v2.2.0"，且含
+# 50_add_susfs_in_gki-android14-6.1.patch。工作流填写的 susfs_commit 可覆盖此默认。
+SUSFS_PIN_COMMIT_BY_BRANCH = {
+    "gki-android14-6.1": "090cf407fea14d960cba55ce6f69cc61a146d1b3",
+}
 SUSFS_REPO_CONFIG = {"repo_url": "https://github.com/ShirkNeko/susfs4ksu.git"}
 
 # SukiSU Patch 仓库配置
@@ -219,6 +224,15 @@ class BuildConfig:
         key = f"{self.android_version}-{self.kernel_version}.{self.sub_level}"
         return ACK_SOURCE_PINS.get(key)
 
+    def effective_susfs_commit(self) -> Optional[str]:
+        """SUSFS 要 checkout 的 commit：工作流显式 susfs_commit 优先，否则用分支默认固定值。
+
+        这样即使不填 susfs_commit，也不会用浮动分支 HEAD，而是固定到已核验的 v2.2.0 commit。
+        """
+        if self.susfs_commit:
+            return self.susfs_commit
+        return SUSFS_PIN_COMMIT_BY_BRANCH.get(self.kernel_branch)
+
     def to_dict(self) -> dict:
         pin = self.ack_pin()
         return {
@@ -233,6 +247,9 @@ class BuildConfig:
             "sukisu_pin_commit": SUKISU_PIN_COMMIT,
             # 修复 八.2：susfs_commit 必须进入 dict → cache key / release / manifest
             "susfs_commit": self.susfs_commit,
+            # SUSFS 实际会 checkout 的 commit（含默认固定值）与分支，便于追溯
+            "susfs_effective_commit": self.effective_susfs_commit(),
+            "susfs_branch": self.kernel_branch,
             # 固定的 ACK 来源（若有）
             "ack_manifest_branch": pin["manifest_branch"] if pin else None,
             "ack_tag": pin["ack_tag"] if pin else None,
