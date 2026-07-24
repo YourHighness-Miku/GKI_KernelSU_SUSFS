@@ -46,6 +46,17 @@ def main() -> int:
         print(f"[manager] 固定失败: HEAD {head} != {SUKISU_PIN_COMMIT}")
         return 2
 
+    # 与内核驱动版本号确定性对齐：把 main 指到固定 commit，并用本地提交数算 versionCode。
+    # 管理器 build.gradle.kts: versionCode = 40000 + rev-list --count HEAD - 2815。
+    run("git branch -f main HEAD", cwd=src, check=False)
+    local_count = subprocess.run("git rev-list --count HEAD", shell=True, cwd=src,
+                                 capture_output=True, text=True).stdout.strip()
+    try:
+        expected_version_code = 40000 + int(local_count) - 2815
+    except ValueError:
+        expected_version_code = None
+    print(f"[manager] 固定提交数={local_count} 期望 versionCode={expected_version_code}")
+
     # manager 工程目录（SukiSU-Ultra 仓库里的 Android app 模块）。
     manager_dir = None
     for cand in ["manager", "app", "."]:
@@ -80,9 +91,11 @@ def main() -> int:
         copied.append(dest.name)
 
     (out_dir / "manager-commit.txt").write_text(
-        f"sukisu_ref={SUKISU_PIN_REF}\nsukisu_commit={head}\napks={copied}\n"
+        f"sukisu_ref={SUKISU_PIN_REF}\nsukisu_commit={head}\n"
+        f"commit_count={local_count}\nexpected_version_code={expected_version_code}\n"
+        f"apks={copied}\n"
     )
-    print(f"[manager] 完成，APK: {copied}, commit={head}")
+    print(f"[manager] 完成，APK: {copied}, commit={head}, versionCode={expected_version_code}")
     return 0
 
 
