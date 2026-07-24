@@ -16,7 +16,7 @@ on:
           - android13
           - android14
           - android15
-        default: android13
+        default: android14
       kernel_version:
         description: 'Kernel 版本'
         required: true
@@ -26,17 +26,17 @@ on:
           - "5.15"
           - "6.1"
           - "6.6"
-        default: "5.15"
+        default: "6.1"
       sub_level:
         description: 'Sub Level 版本'
         required: true
         type: string
-        default: '124'
+        default: '138'
       os_patch_level:
         description: 'OS Patch Level'
         required: true
         type: string
-        default: '2025-02'
+        default: '2026-02'
       revision:
         description: 'Android 12 Revision (可选)'
         required: false
@@ -178,6 +178,31 @@ jobs:
           mkdir -p artifacts
           find /tmp/gki-build -name "*.zip" -type f -exec cp {} artifacts/ \;
           find /tmp/gki-build -name "*.img" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -name "source-manifest.txt" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -name "*AnyKernel3.zip.filelist.txt" -type f -exec cp {} artifacts/ \;
+
+      - name: Build SukiSU manager APK (same commit as driver)
+        continue-on-error: true
+        run: |
+          cd ./.github/workflows/scripts
+          python3 build_manager_apk.py "$GITHUB_WORKSPACE/artifacts" || echo "manager APK 构建失败（非致命，可后续单独出）"
+
+      - name: Verify manager == driver commit
+        run: |
+          cd ./.github/workflows/scripts
+          MANIFEST=$(find /tmp/gki-build -name source-manifest.txt | head -1)
+          echo "source-manifest: $MANIFEST"; cat "$MANIFEST" || true
+          if [ -f "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" ]; then
+            cat "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+            MGR=$(grep -oE 'sukisu_commit=[0-9a-f]+' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" | cut -d= -f2)
+            DRV=$(python3 -c "import json,glob;print(json.load(open(glob.glob('/tmp/gki-build/**/source-manifest.txt',recursive=True)[0]))['sukisu_resolved_commit'] or '')")
+            echo "manager=$MGR driver=$DRV"
+            if [ -n "$MGR" ] && [ -n "$DRV" ] && [ "$MGR" != "$DRV" ]; then
+              echo "::error::manager($MGR) 与 driver($DRV) 不同源"; exit 1
+            fi
+          else
+            echo "未构建管理器 APK，跳过同源核对"
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -189,7 +214,25 @@ jobs:
         run: |
           echo "=== Creating checksums ==="
           sha256sum artifacts/* > SHA256SUMS.txt
+          cp SHA256SUMS.txt artifacts/ || true
           cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.make_release == 'true' && success() }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: aurora-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}-${{ github.run_number }}
+          name: "GKI ${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }} SukiSU+SUSFS (aurora) #${{ github.run_number }}"
+          body: |
+            自动构建的 aurora (Xiaomi 14 Ultra 国行) GKI 内核包。
+            - 内核: android14-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}（ACK tag 固定 + SUBLEVEL 门禁）
+            - SukiSU-Ultra: v4.1.3（内核驱动与管理器 APK 同源）
+            - SUSFS: v2.2.0（读实际源码校验）
+            - AK3 仅替换 boot 分区内核 Image；init_boot 不改动。
+            详见附件 source-manifest.txt / SHA256SUMS.txt。
+          files: |
+            artifacts/*
+          fail_on_unmatched_files: false
 
       - name: Send Telegram Notification
         if: ${{ github.event.inputs.send_telegram == 'true' && success() }}
