@@ -11,7 +11,7 @@
 | sub_level | 138 | Makefile SUBLEVEL == 138（ACK tag android14-6.1.138_r00） |
 | os_patch_level | 2026-02 | boot header / AVB security_patch 2026-02-01（仅元数据） |
 | kernelsu_version | Stable(标准) | — |
-| kernelsu_commit | （留空） | 本仓库固定 SukiSU v4.1.3，忽略此项 |
+| kernelsu_commit | （留空） | 本仓库固定 SukiSU builtin@b1d534bc（含 KSU_SUSFS），忽略此项 |
 | susfs_commit | （留空或指定 v2.2.0 commit） | 门禁读 susfs.h 校验 == v2.2.0 |
 | custom_version | aurora | 便于产物命名与 manifest |
 | use_zram | true | LZ4KD 默认压缩（内置） |
@@ -24,7 +24,7 @@
 
 ## 固定来源（由 config.py 强制）
 - ACK: manifest common-android14-6.1 + tag android14-6.1.138_r00 (4894546596ee3a4b96d9f2157de0d197826cabc0)
-- SukiSU-Ultra: v4.1.3 (0ca744a88835144c58d8256ebb32c279edabfcde)  —— 内核驱动与管理器 APK 同源
+- SukiSU-Ultra: builtin (b1d534bc41941b2c818d7a1a1dac341e4aabfc2d)  —— 含 KSU_SUSFS；驱动固定 commit（manager APK 可选）
 - SUSFS: v2.2.0（读实际 susfs.h 校验）
 - BBG: 若开启则固定 1c664957da7539de860503940ee73c7447f1dfaf
 

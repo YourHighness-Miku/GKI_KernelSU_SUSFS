@@ -34,8 +34,8 @@ class BuilderMix1:
         if not remote:
             raise RuntimeError("common 仓库没有可用 git remote，无法拉取 ACK tag")
 
+        # git fetch 不接受 peels 语法作为 refspec 源；直接抓 tag 即可（annotated tag 会解析到 peeled commit）。
         fetch_specs = [
-            f"+refs/tags/{tag}^{{}}:refs/tags/{tag}",
             f"+refs/tags/{tag}:refs/tags/{tag}",
         ]
         last_err = None
@@ -137,32 +137,44 @@ class BuilderMix1:
         self.resolved_sukisu_commit = head
 
         # === 版本号确定性修复（消除 manager/driver 版本号不一致，如 40838 vs 40837）===
-        # 根因：KernelSU 的 kernel/Kbuild 用「实时 GitHub API 统计 main 的提交数」来算 KSU_VERSION，
-        # 即使已 checkout 到固定 commit，构建时仍会 curl 到当前 main 的最新提交数，
-        # 从而与「管理器 APK 用本地 git rev-list --count HEAD」得到的数不一致。
-        # 修复：把本地 main 指到固定 commit，并把 Kbuild 的提交数来源改成本地 rev-list，
-        # 关闭实时 GitHub API 统计。这样 driver 与 manager 都基于同一个固定 commit 的本地提交数。
+        # 根因：KernelSU 的 kernel/Makefile（或旧版 kernel/Kbuild）会用实时 GitHub API
+        # 统计 main 提交数来算 KSU_VERSION；即使已 checkout 到固定 commit，仍可能漂移。
+        # 修复：把本地 main 指到固定 commit，并把 LOCAL_COUNT 改成本地 rev-list，关闭实时统计。
         self._run_cmd("git branch -f main HEAD", check=True)
         local_count = subprocess.run("git rev-list --count HEAD", shell=True,
                                      capture_output=True, text=True).stdout.strip()
         logger.info(f"KernelSU 固定提交数 (rev-list --count HEAD) = {local_count}")
 
-        kbuild = ksu_dir / "kernel" / "Kbuild"
-        if kbuild.exists():
-            text = kbuild.read_text(errors="ignore")
-            # 强制 LOCAL_COUNT 使用本地提交数，屏蔽 GITHUB_COMMITS 实时统计。
-            if "LOCAL_COUNT" in text and "GITHUB_COMMITS" in text:
-                text = re.sub(
-                    r"LOCAL_COUNT\s*:=.*",
-                    f"LOCAL_COUNT     := {local_count}",
-                    text, count=1,
+        version_files = [
+            ksu_dir / "kernel" / "Makefile",
+            ksu_dir / "kernel" / "Kbuild",
+            ksu_dir / "Makefile",
+            ksu_dir / "Kbuild",
+        ]
+        locked = False
+        for version_file in version_files:
+            if not version_file.exists():
+                continue
+            text = version_file.read_text(errors="ignore")
+            if "LOCAL_COUNT" not in text:
+                continue
+            new_text = re.sub(
+                r"LOCAL_COUNT\s*:=.*",
+                f"LOCAL_COUNT     := {local_count}",
+                text,
+                count=1,
+            )
+            if new_text != text:
+                version_file.write_text(new_text)
+                logger.info(
+                    f"已锁定 KernelSU 版本计数 LOCAL_COUNT = {local_count} @ {version_file}"
                 )
-                kbuild.write_text(text)
-                logger.info(f"已锁定 KernelSU Kbuild LOCAL_COUNT = {local_count}（关闭实时 GitHub 统计）")
-            else:
-                logger.warning("KernelSU Kbuild 未找到预期的 LOCAL_COUNT/GITHUB_COMMITS，跳过锁定（请核对上游是否改版）")
-        else:
-            logger.warning(f"未找到 KernelSU kernel/Kbuild，跳过版本号锁定: {kbuild}")
+                locked = True
+                break
+        if not locked:
+            logger.warning(
+                "未找到可锁定的 LOCAL_COUNT（kernel/Makefile 或 Kbuild），版本号可能仍依赖实时统计"
+            )
 
         # 计算期望的版本号（VERSION_BASE=40000, VERSION_OFFSET=2815，与管理器 build.gradle.kts 一致）。
         try:

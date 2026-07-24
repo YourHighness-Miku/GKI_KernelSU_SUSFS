@@ -88,10 +88,12 @@ ANDROID_KERNEL_MAP = {
 }
 
 # 仓库配置
-# SukiSU-Ultra 固定到稳定 tag，避免浮动 main 导致 manager/driver 版本漂移。
-# v4.1.3 = 0ca744a88835144c58d8256ebb32c279edabfcde（含 post-fs-data 注销 input kprobe 的安全模式修复）。
-SUKISU_PIN_REF = "v4.1.3"
-SUKISU_PIN_COMMIT = "0ca744a88835144c58d8256ebb32c279edabfcde"
+# SukiSU-Ultra 固定到带 KSU_SUSFS 的 builtin 分支精确 commit。
+# 说明：官方稳定 tag（如 v4.1.3）不含 KSU_SUSFS Kconfig；setup.sh 的 builtin 分支才带 SUSFS 集成。
+# 固定 commit = builtin HEAD@2026-07-07：b1d534bc41941b2c818d7a1a1dac341e4aabfc2d
+# （含 KSU_SUSFS/* 与 susfs_init；manager APK 在该 commit 可能不完整，workflow 中 manager 构建为非致命）
+SUKISU_PIN_REF = "builtin"
+SUKISU_PIN_COMMIT = "b1d534bc41941b2c818d7a1a1dac341e4aabfc2d"
 
 KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
                     "branch": "main",
