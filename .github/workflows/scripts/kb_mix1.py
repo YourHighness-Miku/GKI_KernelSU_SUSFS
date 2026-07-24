@@ -21,9 +21,37 @@ class BuilderMix1:
         """把 common/ 精确切到 ACK tag，并用 Makefile SUBLEVEL 做硬门禁。"""
         self._chdir(common_dir)
         tag = pin["ack_tag"]
-        # 精确拉取该 tag（浅取），失败则报错。
-        self._run_cmd(f"git fetch --depth 1 origin refs/tags/{tag}", check=True)
-        self._run_cmd("git checkout -q FETCH_HEAD", check=True)
+        # repo sync 使用 --no-tags，且 remote 名通常是 aosp（不是 origin）。
+        # 直接 fetch refs/tags/<tag> 的 peeled object，兼容 aosp/origin 与 annotated tag。
+        remotes = subprocess.run(
+            "git remote",
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        remote = "aosp" if "aosp" in remotes else ("origin" if "origin" in remotes else (remotes[0] if remotes else ""))
+        if not remote:
+            raise RuntimeError("common 仓库没有可用 git remote，无法拉取 ACK tag")
+
+        fetch_specs = [
+            f"+refs/tags/{tag}^{{}}:refs/tags/{tag}",
+            f"+refs/tags/{tag}:refs/tags/{tag}",
+        ]
+        last_err = None
+        for spec in fetch_specs:
+            try:
+                self._run_cmd(f"git fetch --depth 1 {remote} {spec}", check=True)
+                last_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+        if last_err is not None:
+            raise RuntimeError(
+                f"拉取 ACK tag 失败: remote={remote} tag={tag}; last_error={last_err}"
+            ) from last_err
+
+        self._run_cmd(f"git checkout -q refs/tags/{tag}", check=True)
 
         head = subprocess.run("git rev-parse HEAD", shell=True, capture_output=True, text=True).stdout.strip()
         logger.info(f"common HEAD = {head} (期望 tag {tag} -> {pin['ack_commit']})")
