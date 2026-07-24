@@ -173,7 +173,13 @@ class BuilderMix2:
             self._fix_task_mmu_unused_after_hide(common_dir)
 
     def _fix_task_mmu_unused_after_hide(self, common_dir: Path):
-        """删除 69_hide_stuff 在 6.1.138 task_mmu.c 引入的未使用 dentry 变量与 bypass 标签。"""
+        """修复 69_hide_stuff + SUSFS 在 6.1.138 task_mmu.c 引入的编译错误。
+
+        常见问题：
+        1) `struct dentry *dentry;` 在部分分支未赋值就被使用，-Werror 下触发
+           -Wsometimes-uninitialized；
+        2) 残留未使用的 bypass 标签。
+        """
         task_mmu = common_dir / "fs/proc/task_mmu.c"
         if not task_mmu.exists():
             logger.warning(f"task_mmu.c 不存在，跳过外科修复: {task_mmu}")
@@ -189,12 +195,21 @@ class BuilderMix2:
                 src = new
                 changed.append("removed unused label 'bypass:'")
 
-        # 2) 未使用的 'struct dentry *dentry;' 声明：仅当全文没有其它对 dentry 的使用时删除。
-        #    统计 dentry 出现次数：只剩声明本身则安全删除。
-        decl_pat = re.compile(r'\n[ \t]*struct dentry \*dentry;[ \t]*(?:=[^\n;]*)?;?\n')
-        # 更稳妥：逐个声明检查其后是否被引用
+        # 2) 把未初始化的 dentry 声明改为 = NULL，消掉 -Wsometimes-uninitialized。
+        #    SUSFS 的 spoofed_redirected_name 分支可能跳过 dentry 赋值，但仍会检查 if (dentry)。
+        new = re.sub(
+            r'(\bstruct dentry \*dentry)\s*;',
+            r'\1 = NULL;',
+            src,
+            count=1,
+        )
+        if new != src:
+            src = new
+            changed.append("initialized 'struct dentry *dentry = NULL'")
+
+        # 3) 若声明后完全没有其它 dentry 使用，再删除声明本身。
+        decl_pat = re.compile(r'\n[ \t]*struct dentry \*dentry\s*(?:=\s*NULL\s*)?;[ \t]*\n')
         for m in list(decl_pat.finditer(src)):
-            # 该声明所在函数中 dentry 的使用次数（粗略：整文件计数，声明算 1 次）
             uses = len(re.findall(r'\bdentry\b', src))
             if uses <= 1:
                 src = src[:m.start()] + "\n" + src[m.end():]
