@@ -146,7 +146,24 @@ class BuilderMix3:
                     "CONFIG_NET_SCH_FQ=y\n"          # BBR 推荐 qdisc
                     "CONFIG_DEFAULT_BBR=y\n"
                     'CONFIG_DEFAULT_TCP_CONG="bbr"\n'
+                    # TCP_CONG_ADVANCED 默认还会把部分算法编成模块；若不登记 module_outs，
+                    # Bazel 会在 dist 阶段失败。这里显式关掉不需要的算法，避免额外 .ko。
+                    "# CONFIG_TCP_CONG_BIC is not set\n"
+                    "# CONFIG_TCP_CONG_WESTWOOD is not set\n"
+                    "# CONFIG_TCP_CONG_HTCP is not set\n"
+                    "# CONFIG_TCP_CONG_HSTCP is not set\n"
+                    "# CONFIG_TCP_CONG_HYBLA is not set\n"
+                    "# CONFIG_TCP_CONG_VEGAS is not set\n"
+                    "# CONFIG_TCP_CONG_NV is not set\n"
+                    "# CONFIG_TCP_CONG_SCALABLE is not set\n"
+                    "# CONFIG_TCP_CONG_LP is not set\n"
+                    "# CONFIG_TCP_CONG_VENO is not set\n"
+                    "# CONFIG_TCP_CONG_YEAH is not set\n"
+                    "# CONFIG_TCP_CONG_ILLINOIS is not set\n"
+                    "# CONFIG_TCP_CONG_DCTCP is not set\n"
+                    "# CONFIG_TCP_CONG_CDG is not set\n"
                 )
+            self._ensure_bbr_module_outs()
 
         build_config = self.work_dir / "common/build.config.gki"
         if build_config.exists():
@@ -194,3 +211,33 @@ class BuilderMix3:
         config_file = self.work_dir / "common/arch/arm64/configs/gki_defconfig"
         with open(config_file, "a") as f:
             f.write("CONFIG_MODULE_SIG_FORCE=n\n")
+
+    def _ensure_bbr_module_outs(self):
+        """若仍有 TCP cong 模块被编出，登记到 modules.bzl 的 module_outs，避免 Bazel dist 失败。"""
+        modules_bzl = self.work_dir / "common/modules.bzl"
+        if not modules_bzl.exists():
+            logger.warning(f"modules.bzl 不存在，跳过 BBR module_outs 修复: {modules_bzl}")
+            return
+
+        needed = [
+            "net/ipv4/tcp_bbr.ko",
+            "net/ipv4/tcp_bic.ko",
+            "net/ipv4/tcp_westwood.ko",
+            "net/ipv4/tcp_htcp.ko",
+        ]
+        content = modules_bzl.read_text(errors="ignore")
+        missing = [m for m in needed if f'"{m}"' not in content]
+        if not missing:
+            logger.info("BBR 相关 module_outs 已存在，无需修改 modules.bzl")
+            return
+
+        # 优先插入到 module_outs 列表末尾（最后一个 .ko 条目后）。
+        insert_block = "".join(f'    "{m}",\n' for m in missing)
+        m = re.search(r'("[\w./-]+\.ko",)\n(\])', content)
+        if m:
+            content = content[:m.end(1)] + "\n" + insert_block + content[m.start(2):]
+        else:
+            content += "\n# BBR module_outs fallback\n" + insert_block
+
+        modules_bzl.write_text(content)
+        logger.info("已补充 modules.bzl module_outs: " + ", ".join(missing))
