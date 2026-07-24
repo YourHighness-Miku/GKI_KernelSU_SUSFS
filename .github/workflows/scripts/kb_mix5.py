@@ -54,8 +54,11 @@ class BuilderMix5:
     def verify_final_config_gki_invariants(self):
         """GKI 兼容性不变量门禁：确认小米 14 Ultra(aurora) 需要的基础能力未被破坏。
 
-        这些多来自 ACK gki_defconfig 默认；此处显式核对，防止我们追加的配置意外覆盖/回归。
-        KSU 依赖 KPROBES && EXT4_FS，否则 CONFIG_KSU 会静默失效。
+        编译前通常只能读到 gki_defconfig：其中很多架构默认项（如 ARM64_4K_PAGES、SWAP）
+        不会写成 =y，而是由 Kconfig 默认启用。因此：
+        - 对显式配置项：要求 =y；
+        - 对架构默认项：仅在被显式关闭时失败。
+        若存在最终 .config，则所有项都按 =y 严格检查。
         """
         # 用最终生效的 .config（若存在）优先，回退到 defconfig。
         cfg_candidates = [
@@ -68,27 +71,60 @@ class BuilderMix5:
             logger.warning("未找到 .config/defconfig，跳过 GKI 不变量门禁")
             return
         text = cfg.read_text(errors="ignore")
+        is_final_config = cfg.name == ".config"
 
         def on(sym):
             return f"{sym}=y" in text
 
-        # KSU 依赖项 + 设备基础能力。SELINUX/EXT4/KPROBES/4K 缺失即拒绝。
+        def explicitly_disabled(sym):
+            return (
+                f"# {sym} is not set" in text
+                or f"{sym}=n" in text
+                or f"{sym}=m" in text
+            )
+
+        # 这些通常会写进 defconfig / 我们追加的配置。
         required_y = [
             "CONFIG_KSU",
             "CONFIG_KPROBES",       # KSU 依赖
             "CONFIG_EXT4_FS",       # KSU 依赖
-            "CONFIG_ARM64_4K_PAGES",
             "CONFIG_SECURITY_SELINUX",
             "CONFIG_OVERLAY_FS",
         ]
-        missing = [s for s in required_y if not on(s)]
-        # ZRAM 开启时 SWAP 也应在（zram 作为 swap backend）。
-        if self.config.use_zram and not on("CONFIG_SWAP"):
-            missing.append("CONFIG_SWAP")
+        # 这些是 arch/Kconfig 默认能力，gki_defconfig 常不写 =y。
+        default_enabled = [
+            "CONFIG_ARM64_4K_PAGES",
+        ]
+        if self.config.use_zram:
+            default_enabled.append("CONFIG_SWAP")
+
+        missing = []
+        for sym in required_y:
+            if not on(sym):
+                missing.append(sym)
+
+        for sym in default_enabled:
+            if is_final_config:
+                if not on(sym):
+                    missing.append(sym)
+            else:
+                # 预编译阶段：仅禁止被显式关掉。
+                if explicitly_disabled(sym):
+                    missing.append(f"{sym}(explicitly disabled)")
+                elif on(sym):
+                    pass
+                else:
+                    logger.info(f"GKI 默认项 {sym} 未写入 {cfg.name}，按 Kconfig 默认视为启用")
+
         if missing:
-            raise RuntimeError("GKI 不变量门禁失败，缺少: " + ", ".join(missing) +
-                               f"（来源: {cfg}）")
-        logger.info(f"GKI 不变量门禁通过（KSU/KPROBES/EXT4/4K/SELINUX/OverlayFS，来源 {cfg.name}）")
+            raise RuntimeError(
+                "GKI 不变量门禁失败，缺少: "
+                + ", ".join(missing)
+                + f"（来源: {cfg}）"
+            )
+        logger.info(
+            f"GKI 不变量门禁通过（KSU/KPROBES/EXT4/4K/SELINUX/OverlayFS，来源 {cfg.name}）"
+        )
 
     def patch_kpm_image(self):
         if not self.config.use_kpm or self.config.kernel_version == "6.6":
