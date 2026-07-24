@@ -18,20 +18,28 @@ logger = logging.getLogger(__name__)
 
 class BuilderMix0:
     def _apply_susfs_commit(self):
-        if not self.config.susfs_commit or not self.susfs_dir.exists():
+        # 使用 effective_susfs_commit()：工作流显式值优先，否则用已核验的分支默认固定 commit。
+        # 这样默认也不会停留在浮动分支 HEAD 上（修复：SUSFS 必须固定真实 commit）。
+        target = self.config.effective_susfs_commit()
+        if not target or not self.susfs_dir.exists():
             return
 
-        logger.info(f"=== 切换 SUSFS commit/tag: {self.config.susfs_commit} ===")
+        logger.info(f"=== 固定 SUSFS commit/tag: {target} ===")
         self._chdir(self.susfs_dir)
 
         self._run_cmd("git fetch --all --tags --prune", check=True)
 
-        if self.config.susfs_commit.startswith("HEAD~"):
-            self._run_cmd(f"git reset --hard {self.config.susfs_commit}", check=True)
+        if target.startswith("HEAD~"):
+            self._run_cmd(f"git reset --hard {target}", check=True)
         else:
-            self._run_cmd(f"git checkout --force {self.config.susfs_commit}", check=True)
+            self._run_cmd(f"git checkout --force {target}", check=True)
 
-        self._run_cmd("git rev-parse --short HEAD", check=True)
+        head = subprocess.run("git rev-parse HEAD", shell=True, cwd=str(self.susfs_dir),
+                              capture_output=True, text=True).stdout.strip()
+        logger.info(f"SUSFS pinned HEAD = {head}")
+        # 若是完整 40 位 commit，则强校验 checkout 结果与目标一致。
+        if len(target) == 40 and head != target:
+            raise RuntimeError(f"SUSFS 固定失败：HEAD {head} != 目标 {target}")
         self._chdir(self.workspace)
 
     def clone_repositories(self):
