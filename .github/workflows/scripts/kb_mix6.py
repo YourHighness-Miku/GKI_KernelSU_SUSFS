@@ -118,7 +118,10 @@ class BuilderMix6:
             "sukisu_pin_ref": SUKISU_PIN_REF,
             "sukisu_pin_commit": SUKISU_PIN_COMMIT,
             "sukisu_resolved_commit": self.resolved_sukisu_commit,
+            "expected_ksu_version_code": self.expected_ksu_version_code,
             "susfs_commit": self.config.susfs_commit,
+            "susfs_effective_commit": self.config.effective_susfs_commit(),
+            "susfs_branch": self.config.kernel_branch,
             "expected_susfs_version": EXPECTED_SUSFS_VERSION,
             "use_kpm": self.config.use_kpm,
             "use_zram": self.config.use_zram,
@@ -155,6 +158,8 @@ class BuilderMix6:
 
             # 编译前 defconfig 门禁（KPM/BBR/ZRAM 与开关一致）。
             self.verify_final_config()
+            # 编译前 GKI 不变量门禁（KSU 依赖 + 4K/SELINUX/OverlayFS/SWAP）。
+            self.verify_final_config_gki_invariants()
 
             if not self.build_kernel():
                 return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
