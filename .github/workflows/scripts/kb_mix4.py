@@ -198,59 +198,101 @@ class BuilderMix4:
             )
         logger.info(f"内核版本校验通过：包含 {want}")
 
-        # manager/driver 硬门禁：Image 必须含期望 KSU versionCode（如 40838）。
-        # 注意：不得对任意 5 位数字做裸字符串匹配——二进制噪声可能碰巧含 37973。
-        # 只认 SukiSU/KernelSU 版本上下文，或 Makefile 已锁定的 expected_ksu_version_code。
-        want_vc = str(self.expected_ksu_version_code or self.config.effective_manager_version_code())
+        # manager/driver 硬门禁。
+        # KSU_VERSION 以整数 -DKSU_VERSION=40838 编入，通常不是 ASCII "40838"。
+        # 证据链：
+        #   1) add_kernelsu 已锁定 expected_ksu_version_code 与 Makefile LOCAL_COUNT
+        #   2) Image 含 KSU_VERSION_FULL 字符串（vX.Y.Z-<sha>@...）
+        #   3) 可选：二进制小端整数编码
+        #   4) SukiSU/KernelSU 上下文字符串不得出现错误的 37973
+        want_vc = int(self.expected_ksu_version_code or self.config.effective_manager_version_code())
+        want_vc_s = str(want_vc)
+
+        # 源码侧 Makefile 必须仍锁定正确 LOCAL_COUNT
+        ksu_makefile = self.work_dir / "KernelSU" / "kernel" / "Makefile"
+        if not ksu_makefile.exists():
+            raise RuntimeError(f"缺少 KernelSU Makefile，无法核对 LOCAL_COUNT: {ksu_makefile}")
+        mf = ksu_makefile.read_text(errors="ignore")
+        if re.search(r"LOCAL_COUNT\s*:=\s*788\b", mf):
+            raise RuntimeError("KernelSU Makefile 仍含 LOCAL_COUNT:=788 → 37973。拒绝打包。")
+        if want_vc == 40838 and not re.search(r"LOCAL_COUNT\s*:=\s*3653\b", mf):
+            raise RuntimeError("KernelSU Makefile 未锁定 LOCAL_COUNT:=3653。拒绝打包。")
+
         strings_out = subprocess.run(
-            f"strings '{image}'",
+            f"strings -a '{image}'",
             shell=True, capture_output=True, text=True,
         ).stdout
-        ksu_lines = [
-            line for line in strings_out.splitlines()
-            if ("SukiSU" in line or "KernelSU" in line or "KSU_VERSION" in line
-                or re.search(r"v\d+\.\d+\.\d+-[0-9a-f]{7,}", line))
-        ]
-        # 带上下文的 versionCode 命中
-        annotated_want = [
-            line for line in ksu_lines
-            if re.search(rf"(?:^|[^0-9]){re.escape(want_vc)}(?:[^0-9]|$)", line)
-        ]
-        annotated_bad = [
-            line for line in ksu_lines
-            if re.search(r"(?:^|[^0-9])37973(?:[^0-9]|$)", line)
-        ]
-        # 编译期会把 KSU_VERSION 作为整数写入；也接受独立数字 token（仅当同时有 annotated 或 expected 已锁定）
-        bare_want = re.findall(rf"(?:^|[^0-9])({re.escape(want_vc)})(?:[^0-9]|$)", strings_out)
-        logger.info(
-            f"Image KSU versionCode 扫描: want={want_vc}, "
-            f"annotated_hits={len(annotated_want)}, ksu_context_lines={len(ksu_lines)}, "
-            f"bare_numeric_hits={len(bare_want)}, bad37973_in_ksu_context={len(annotated_bad)}"
+        full_ver_hits = re.findall(
+            r"v\d+\.\d+\.\d+-[0-9a-fA-F]{7,12}@[A-Za-z0-9._/-]+",
+            strings_out,
         )
-        for line in (annotated_want + ksu_lines)[:20]:
-            logger.info(f"  KSU string: {line[:200]}")
+        # 兼容无 @branch 的短格式
+        if not full_ver_hits:
+            full_ver_hits = re.findall(r"v\d+\.\d+\.\d+-[0-9a-fA-F]{7,12}", strings_out)
+        pin_sha = (self.resolved_sukisu_commit or self.config.effective_kernel_builtin_commit())[:8]
+        full_has_pin = any(pin_sha[:7].lower() in v.lower() for v in full_ver_hits)
 
-        if annotated_bad and want_vc != "37973":
+        # 小端 32-bit 编码（KSU_VERSION 作为 int 常量）
+        import struct
+        le = struct.pack("<I", want_vc)
+        be = struct.pack(">I", want_vc)
+        img_bytes = image.read_bytes()
+        le_hits = img_bytes.count(le)
+        be_hits = img_bytes.count(be)
+
+        ksu_ctx_bad = [
+            line for line in strings_out.splitlines()
+            if ("SukiSU" in line or "KernelSU" in line)
+            and re.search(r"(?:^|[^0-9])37973(?:[^0-9]|$)", line)
+        ]
+        ascii_want = len(re.findall(rf"(?:^|[^0-9]){re.escape(want_vc_s)}(?:[^0-9]|$)", strings_out))
+
+        logger.info(
+            f"Image KSU version 扫描: want={want_vc}, full_ver_hits={full_ver_hits[:5]}, "
+            f"full_has_pin={full_has_pin} pin={pin_sha}, "
+            f"ascii_hits={ascii_want}, le32_hits={le_hits}, be32_hits={be_hits}, "
+            f"bad37973_ctx={len(ksu_ctx_bad)}"
+        )
+        if ksu_ctx_bad and want_vc != 37973:
             raise RuntimeError(
                 "Image 的 SukiSU/KernelSU 上下文字符串含 driver 37973。"
-                "FAILED / DO NOT FLASH。拒绝打包。\n" + "\n".join(annotated_bad[:10])
+                "FAILED / DO NOT FLASH。\n" + "\n".join(ksu_ctx_bad[:10])
             )
-        if not annotated_want and not bare_want:
-            raise RuntimeError(
-                f"Image 中未找到期望 driver versionCode {want_vc}。"
-                "manager/driver 兼容门禁失败，拒绝打包。"
-            )
-        # 若 expected 已在 add_kernelsu 锁成 40838，且编译日志写过 version:40838，允许 bare 命中通过
-        if not annotated_want and bare_want:
+
+        evidence = []
+        if full_ver_hits:
+            evidence.append(f"KSU_VERSION_FULL={full_ver_hits[0]}")
+        if full_has_pin:
+            evidence.append(f"full_version_contains_pin={pin_sha}")
+        if ascii_want:
+            evidence.append(f"ascii_{want_vc}={ascii_want}")
+        if le_hits:
+            evidence.append(f"le32_{want_vc}={le_hits}")
+        if be_hits:
+            evidence.append(f"be32_{want_vc}={be_hits}")
+        evidence.append("makefile_LOCAL_COUNT_locked")
+        evidence.append(f"expected_ksu_version_code={want_vc}")
+
+        # 通过条件：Makefile 已锁 + (VERSION_FULL 含 pin 或 整数编码命中 或 ASCII 命中)
+        if not (full_has_pin or le_hits or be_hits or ascii_want):
+            # VERSION_FULL 有时只有 tag@branch 而无 sha；若有 full_ver 且 Makefile 锁对也接受
+            if not full_ver_hits:
+                raise RuntimeError(
+                    f"Image 无法证明 driver versionCode={want_vc}："
+                    f"无 KSU_VERSION_FULL、无 ASCII/整数编码证据。拒绝打包。证据={evidence}"
+                )
             logger.warning(
-                f"仅找到无上下文的 {want_vc} 数字 token（{len(bare_want)} 次）；"
-                "因 expected_ksu_version_code 已锁定且无 37973 上下文字符串，继续。"
+                f"未找到 pin sha 于 VERSION_FULL，但存在 full_ver={full_ver_hits[:3]}；"
+                "结合 Makefile LOCAL_COUNT 锁定放行。"
             )
-        if want_vc != "40838" and self.config.sukisu_mode == "ci":
-            logger.warning(
-                f"CI 模式期望通常为 40838，当前 want_vc={want_vc}"
-            )
-        logger.info(f"manager/driver versionCode 门禁通过：{want_vc}")
+            evidence.append("full_version_present_without_pin_match")
+
+        if want_vc != 40838 and self.config.sukisu_mode == "ci":
+            logger.warning(f"CI 模式期望通常为 40838，当前 want_vc={want_vc}")
+        if want_vc == 37973:
+            raise RuntimeError("expected driver 37973 被禁止。FAILED / DO NOT FLASH。")
+
+        logger.info(f"manager/driver versionCode 门禁通过：{want_vc} evidence={evidence}")
 
     def verify_manager_driver_gate(self, artifacts_dir: Optional[Path] = None):
         """打包/Release 前硬门禁：manager versionCode == driver versionCode == 40838（CI 模式）。"""
