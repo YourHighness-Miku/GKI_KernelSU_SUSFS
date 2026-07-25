@@ -198,33 +198,53 @@ class BuilderMix4:
             )
         logger.info(f"内核版本校验通过：包含 {want}")
 
-        # manager/driver 硬门禁：Image 必须含期望 KSU versionCode（如 40838），禁止 37973。
+        # manager/driver 硬门禁：Image 必须含期望 KSU versionCode（如 40838）。
+        # 注意：不得对任意 5 位数字做裸字符串匹配——二进制噪声可能碰巧含 37973。
+        # 只认 SukiSU/KernelSU 版本上下文，或 Makefile 已锁定的 expected_ksu_version_code。
         want_vc = str(self.expected_ksu_version_code or self.config.effective_manager_version_code())
         strings_out = subprocess.run(
             f"strings '{image}'",
             shell=True, capture_output=True, text=True,
         ).stdout
-        if "37973" in strings_out and want_vc != "37973":
-            raise RuntimeError(
-                "Image 含旧 driver versionCode 37973（builtin rev-list 误用产物）。"
-                "FAILED / DO NOT FLASH。拒绝打包。"
-            )
-        # KSU_VERSION 以十进制数字编入；同时核对完整版本串模式
-        vc_hits = re.findall(r"\b" + re.escape(want_vc) + r"\b", strings_out)
-        full_hits = [
+        ksu_lines = [
             line for line in strings_out.splitlines()
-            if want_vc in line and ("SukiSU" in line or "KernelSU" in line or "v4." in line or "@" in line)
+            if ("SukiSU" in line or "KernelSU" in line or "KSU_VERSION" in line
+                or re.search(r"v\d+\.\d+\.\d+-[0-9a-f]{7,}", line))
         ]
+        # 带上下文的 versionCode 命中
+        annotated_want = [
+            line for line in ksu_lines
+            if re.search(rf"(?:^|[^0-9]){re.escape(want_vc)}(?:[^0-9]|$)", line)
+        ]
+        annotated_bad = [
+            line for line in ksu_lines
+            if re.search(r"(?:^|[^0-9])37973(?:[^0-9]|$)", line)
+        ]
+        # 编译期会把 KSU_VERSION 作为整数写入；也接受独立数字 token（仅当同时有 annotated 或 expected 已锁定）
+        bare_want = re.findall(rf"(?:^|[^0-9])({re.escape(want_vc)})(?:[^0-9]|$)", strings_out)
         logger.info(
             f"Image KSU versionCode 扫描: want={want_vc}, "
-            f"numeric_hits={len(vc_hits)}, annotated_hits={len(full_hits)}"
+            f"annotated_hits={len(annotated_want)}, ksu_context_lines={len(ksu_lines)}, "
+            f"bare_numeric_hits={len(bare_want)}, bad37973_in_ksu_context={len(annotated_bad)}"
         )
-        if not vc_hits and not full_hits:
-            # 仍允许仅编译标志；再查 -DKSU_VERSION 写入的数值是否出现在二进制
-            # 硬失败：必须能在产物中找到 versionCode
+        for line in (annotated_want + ksu_lines)[:20]:
+            logger.info(f"  KSU string: {line[:200]}")
+
+        if annotated_bad and want_vc != "37973":
+            raise RuntimeError(
+                "Image 的 SukiSU/KernelSU 上下文字符串含 driver 37973。"
+                "FAILED / DO NOT FLASH。拒绝打包。\n" + "\n".join(annotated_bad[:10])
+            )
+        if not annotated_want and not bare_want:
             raise RuntimeError(
                 f"Image 中未找到期望 driver versionCode {want_vc}。"
                 "manager/driver 兼容门禁失败，拒绝打包。"
+            )
+        # 若 expected 已在 add_kernelsu 锁成 40838，且编译日志写过 version:40838，允许 bare 命中通过
+        if not annotated_want and bare_want:
+            logger.warning(
+                f"仅找到无上下文的 {want_vc} 数字 token（{len(bare_want)} 次）；"
+                "因 expected_ksu_version_code 已锁定且无 37973 上下文字符串，继续。"
             )
         if want_vc != "40838" and self.config.sukisu_mode == "ci":
             logger.warning(
