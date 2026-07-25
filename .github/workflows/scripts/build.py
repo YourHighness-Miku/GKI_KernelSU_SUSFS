@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-release", action="store_true")
     parser.add_argument("--custom-version", dest="custom_version", default=None)
     parser.add_argument("--revision")
+    parser.add_argument("--sukisu-mode", choices=["stable", "ci"], default="ci")
+    parser.add_argument("--manager-commit", default=None)
+    parser.add_argument("--manager-version-code", type=int, default=None)
+    parser.add_argument("--manager-ci-run", default=None)
+    parser.add_argument("--kernel-builtin-commit", default=None)
     parser.add_argument("--matrix", "-m")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--list-configs", action="store_true")
@@ -99,6 +104,11 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         make_release=not args.no_release,
         custom_version=args.custom_version,
         revision=args.revision,
+        sukisu_mode=args.sukisu_mode,
+        manager_commit=args.manager_commit,
+        manager_version_code=args.manager_version_code,
+        manager_ci_run=args.manager_ci_run,
+        kernel_builtin_commit=args.kernel_builtin_commit,
     )
 
 

@@ -6,6 +6,7 @@ import datetime
 import shutil
 import json
 from pathlib import Path
+from typing import Optional
 
 from config import (KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
@@ -181,7 +182,7 @@ class BuilderMix4:
         return self.work_dir / "bazel-bin/common/kernel_aarch64"
 
     def verify_kernel_version(self):
-        """编译产物版本门禁：Image 里必须包含期望的 x.y.z（修复 六/八.5 的产物侧校验）。"""
+        """编译产物版本门禁：Image 里必须包含期望的 x.y.z，以及 KSU versionCode。"""
         image_dir = self._find_image_dir()
         image = image_dir / "Image"
         if not image.exists():
@@ -196,3 +197,69 @@ class BuilderMix4:
                 f"内核版本校验失败：Image 中未包含期望版本 {want}。实际: '{out}'。拒绝打包。"
             )
         logger.info(f"内核版本校验通过：包含 {want}")
+
+        # manager/driver 硬门禁：Image 必须含期望 KSU versionCode（如 40838），禁止 37973。
+        want_vc = str(self.expected_ksu_version_code or self.config.effective_manager_version_code())
+        strings_out = subprocess.run(
+            f"strings '{image}'",
+            shell=True, capture_output=True, text=True,
+        ).stdout
+        if "37973" in strings_out and want_vc != "37973":
+            raise RuntimeError(
+                "Image 含旧 driver versionCode 37973（builtin rev-list 误用产物）。"
+                "FAILED / DO NOT FLASH。拒绝打包。"
+            )
+        # KSU_VERSION 以十进制数字编入；同时核对完整版本串模式
+        vc_hits = re.findall(r"\b" + re.escape(want_vc) + r"\b", strings_out)
+        full_hits = [
+            line for line in strings_out.splitlines()
+            if want_vc in line and ("SukiSU" in line or "KernelSU" in line or "v4." in line or "@" in line)
+        ]
+        logger.info(
+            f"Image KSU versionCode 扫描: want={want_vc}, "
+            f"numeric_hits={len(vc_hits)}, annotated_hits={len(full_hits)}"
+        )
+        if not vc_hits and not full_hits:
+            # 仍允许仅编译标志；再查 -DKSU_VERSION 写入的数值是否出现在二进制
+            # 硬失败：必须能在产物中找到 versionCode
+            raise RuntimeError(
+                f"Image 中未找到期望 driver versionCode {want_vc}。"
+                "manager/driver 兼容门禁失败，拒绝打包。"
+            )
+        if want_vc != "40838" and self.config.sukisu_mode == "ci":
+            logger.warning(
+                f"CI 模式期望通常为 40838，当前 want_vc={want_vc}"
+            )
+        logger.info(f"manager/driver versionCode 门禁通过：{want_vc}")
+
+    def verify_manager_driver_gate(self, artifacts_dir: Optional[Path] = None):
+        """打包/Release 前硬门禁：manager versionCode == driver versionCode == 40838（CI 模式）。"""
+        want = self.config.effective_manager_version_code()
+        got = self.expected_ksu_version_code
+        if got is None:
+            raise RuntimeError("expected_ksu_version_code 未设置，拒绝发布")
+        if int(got) != int(want):
+            raise RuntimeError(
+                f"manager/driver 不匹配：manager={want} driver={got}。拒绝发布。"
+            )
+        if int(got) == 37973:
+            raise RuntimeError("driver 仍为 37973（旧错误映射）。FAILED / DO NOT FLASH。")
+        if self.config.sukisu_mode == "ci" and int(got) != 40838:
+            raise RuntimeError(
+                f"CI 模式强制 driver versionCode=40838，实际 {got}。拒绝发布。"
+            )
+        # 源码侧 LOCAL_COUNT 再核对
+        ksu_makefile = self.work_dir / "KernelSU" / "kernel" / "Makefile"
+        if ksu_makefile.exists():
+            text = ksu_makefile.read_text(errors="ignore")
+            if re.search(r"LOCAL_COUNT\s*:=\s*788\b", text):
+                raise RuntimeError("KernelSU Makefile 仍含 LOCAL_COUNT:=788，拒绝发布")
+            if not re.search(r"LOCAL_COUNT\s*:=\s*3653\b", text) and int(got) == 40838:
+                raise RuntimeError(
+                    "KernelSU Makefile 未锁定 LOCAL_COUNT:=3653，拒绝发布"
+                )
+        logger.info(
+            f"manager/driver 硬门禁通过：versionCode={got}, "
+            f"manager_commit={self.resolved_manager_commit}, "
+            f"builtin_commit={self.resolved_sukisu_commit}"
+        )

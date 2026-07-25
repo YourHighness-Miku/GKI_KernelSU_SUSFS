@@ -10,7 +10,10 @@ from pathlib import Path
 from config import (KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
                    LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL,
-                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION)
+                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION,
+                   SUKISU_MANAGER_PIN_REF, SUKISU_MANAGER_PIN_COMMIT,
+                   SUKISU_MAIN_COMMIT_COUNT, EXPECTED_KSU_VERSION_CODE,
+                   SUKISU_MANAGER_CI_LABEL)
 from kb_types import BuildResult
 
 logger = logging.getLogger(__name__)
@@ -115,10 +118,19 @@ class BuilderMix6:
             "ack_manifest_branch": pin.get("manifest_branch"),
             "ack_tag": pin.get("ack_tag"),
             "ack_commit_expected": pin.get("ack_commit"),
+            "sukisu_mode": self.config.sukisu_mode,
             "sukisu_pin_ref": SUKISU_PIN_REF,
-            "sukisu_pin_commit": SUKISU_PIN_COMMIT,
+            "sukisu_pin_commit": self.config.effective_kernel_builtin_commit(),
             "sukisu_resolved_commit": self.resolved_sukisu_commit,
+            "sukisu_manager_pin_ref": SUKISU_MANAGER_PIN_REF,
+            "sukisu_manager_pin_commit": self.config.effective_manager_commit(),
+            "sukisu_manager_ci": self.config.manager_ci_run or SUKISU_MANAGER_CI_LABEL,
+            "sukisu_main_commit_count": SUKISU_MAIN_COMMIT_COUNT,
+            "resolved_main_commit_count": self.resolved_main_commit_count,
             "expected_ksu_version_code": self.expected_ksu_version_code,
+            "manager_version_code_baseline": self.config.effective_manager_version_code(),
+            "legacy_failed_driver_version_code": 37973,
+            "legacy_failed_note": "FAILED/DO NOT FLASH: old builds used builtin rev-list=788 → 37973",
             "susfs_commit": self.config.susfs_commit,
             "susfs_effective_commit": self.config.effective_susfs_commit(),
             "susfs_branch": self.config.kernel_branch,
@@ -127,6 +139,7 @@ class BuilderMix6:
             "use_zram": self.config.use_zram,
             "set_default_bbr": self.config.set_default_bbr,
             "use_bbg": self.config.use_bbg,
+            "support_op8e": self.config.support_op8e,
         }
         out = self.work_dir / "source-manifest.txt"
         out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
@@ -164,14 +177,18 @@ class BuilderMix6:
             if not self.build_kernel():
                 return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
 
-            # 编译后产物版本门禁（Image 内必须含期望 x.y.z）。
+            # 编译后产物版本门禁（Image 内必须含期望 x.y.z + KSU versionCode）。
             self.verify_kernel_version()
+            # manager/driver 硬门禁：不匹配则禁止打包/发布。
+            self.verify_manager_driver_gate()
 
             self.patch_kpm_image()
             artifacts = []
             artifacts.extend(self.prepare_boot_images())
             artifacts.extend(self.create_anykernel_zips())
             artifacts.extend(self.write_source_manifest())
+            # 打包后再核对一次，防止中途被改写。
+            self.verify_manager_driver_gate()
 
             build_time = time.time() - start_time
             logger.info(f"构建成功! 耗时: {build_time:.2f} 秒, 生成 {len(artifacts)} 个产物")

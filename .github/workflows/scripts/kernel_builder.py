@@ -114,6 +114,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         self.toolchain_dir = self.workspace / "toolchain"
         self.mkbootimg_dir = self.workspace / "mkbootimg"
         self.resolved_sukisu_commit: Optional[str] = None
+        self.resolved_manager_commit: Optional[str] = None
+        self.resolved_main_commit_count: Optional[int] = None
         self.expected_ksu_version_code: Optional[int] = None
         self._setup_env()
 

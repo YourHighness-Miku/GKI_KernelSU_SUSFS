@@ -10,7 +10,11 @@ from pathlib import Path
 from config import (KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
                    LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL,
-                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION)
+                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION,
+                   SUKISU_MANAGER_PIN_COMMIT, SUKISU_MANAGER_PIN_REF,
+                   SUKISU_MAIN_COMMIT_COUNT, EXPECTED_KSU_VERSION_CODE,
+                   SUKISU_VERSION_BASE, SUKISU_VERSION_OFFSET,
+                   SUKISU_MANAGER_CI_LABEL)
 from kb_types import BuildResult
 
 logger = logging.getLogger(__name__)
@@ -107,12 +111,32 @@ class BuilderMix1:
                 f.write("obj-y += hmbird_patch.o\n")
 
     def add_kernelsu(self):
-        logger.info(f"=== 添加 SukiSU Ultra KernelSU (builtin, 固定 {SUKISU_PIN_REF}) ===")
+        """安装 SukiSU：内核源码 pin 到 builtin(SUSFS)，versionCode 按 main 计数锁定。
+
+        关键兼容规则（官方）:
+          versionCode = 40000 + rev-list --count main - 2815
+        管理器 40838 对应 main tip f1e24b66（count=3653 / ci_3653）。
+        内核源码必须用 builtin（含 KSU_SUSFS），但 LOCAL_COUNT 必须是 main 的 3653，
+        绝不能 `git branch -f main HEAD` 后对 builtin 做 rev-list（那会得到 788→37973）。
+        """
+        pin_commit = self.config.effective_kernel_builtin_commit()
+        want_vc = self.config.effective_manager_version_code()
+        main_count = SUKISU_MAIN_COMMIT_COUNT
+        manager_commit = self.config.effective_manager_commit()
+
+        logger.info(
+            f"=== 添加 SukiSU Ultra KernelSU "
+            f"(源码 {SUKISU_PIN_REF}@{pin_commit[:12]}, "
+            f"versionCount main={main_count} → versionCode={want_vc}, "
+            f"manager {SUKISU_MANAGER_PIN_REF}@{manager_commit[:12]} / {SUKISU_MANAGER_CI_LABEL}) ==="
+        )
         self._chdir(self.work_dir)
 
-        # 使用 SukiSU Ultra 官方 builtin，并固定到稳定 commit（修复 八.1 / 十九.15）。
-        # setup.sh 从固定 commit 拉取，避免浮动 main 造成 manager/driver 漂移。
-        setup_url = KSU_REPO_CONFIG["setup_script"]  # 已指向 SUKISU_PIN_COMMIT
+        # setup.sh 从固定 builtin commit 拉取，避免浮动 HEAD。
+        setup_url = (
+            f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/"
+            f"{pin_commit}/kernel/setup.sh"
+        )
 
         # 清理旧 KernelSU，避免上一次失败构建残留污染。
         self._run_cmd("rm -rf KernelSU", check=True)
@@ -125,25 +149,52 @@ class BuilderMix1:
 
         self._chdir(ksu_dir)
 
-        # 把 KernelSU 精确固定到 SUKISU_PIN_COMMIT，并记录解析出的 SHA。
+        # 把 KernelSU 源码精确固定到 builtin pin，并记录解析出的 SHA。
         self._run_cmd("git fetch --all --tags --prune", check=True)
-        self._run_cmd(f"git checkout --force {SUKISU_PIN_COMMIT}", check=True)
-        head = subprocess.run("git rev-parse HEAD", shell=True, capture_output=True, text=True).stdout.strip()
-        logger.info(f"SukiSU KernelSU pinned HEAD = {head} (期望 {SUKISU_PIN_COMMIT})")
-        if head != SUKISU_PIN_COMMIT and not SUKISU_PIN_COMMIT.startswith(head[:12]):
+        self._run_cmd(f"git checkout --force {pin_commit}", check=True)
+        head = subprocess.run(
+            "git rev-parse HEAD", shell=True, capture_output=True, text=True
+        ).stdout.strip()
+        logger.info(f"SukiSU KernelSU 源码 pinned HEAD = {head} (期望 {pin_commit})")
+        if head != pin_commit and not pin_commit.startswith(head[:12]):
             raise RuntimeError(
-                f"SukiSU 固定失败：KernelSU HEAD {head} != 期望 {SUKISU_PIN_COMMIT}。拒绝继续。"
+                f"SukiSU 固定失败：KernelSU HEAD {head} != 期望 {pin_commit}。拒绝继续。"
             )
         self.resolved_sukisu_commit = head
+        self.resolved_manager_commit = manager_commit
+        self.resolved_main_commit_count = main_count
 
-        # === 版本号确定性修复（消除 manager/driver 版本号不一致，如 40838 vs 40837）===
-        # 根因：KernelSU 的 kernel/Makefile（或旧版 kernel/Kbuild）会用实时 GitHub API
-        # 统计 main 提交数来算 KSU_VERSION；即使已 checkout 到固定 commit，仍可能漂移。
-        # 修复：把本地 main 指到固定 commit，并把 LOCAL_COUNT 改成本地 rev-list，关闭实时统计。
-        self._run_cmd("git branch -f main HEAD", check=True)
-        local_count = subprocess.run("git rev-list --count HEAD", shell=True,
-                                     capture_output=True, text=True).stdout.strip()
-        logger.info(f"KernelSU 固定提交数 (rev-list --count HEAD) = {local_count}")
+        # === 版本号硬锁定（修复 40838 vs 37973）===
+        # 官方 Makefile 用 REPO_BRANCH=main 的提交数算 KSU_VERSION。
+        # 禁止：git branch -f main HEAD（会把 main 指到 builtin，count 变成 788）。
+        # 正确：LOCAL_COUNT 强制为 main 在 manager pin 上的提交数 3653。
+        builtin_count = subprocess.run(
+            "git rev-list --count HEAD", shell=True, capture_output=True, text=True
+        ).stdout.strip()
+        logger.info(
+            f"builtin HEAD rev-list={builtin_count}（仅供参考，禁止用于 versionCode）；"
+            f"强制 LOCAL_COUNT={main_count}（main@{manager_commit[:12]}）"
+        )
+        if str(builtin_count) == str(main_count):
+            logger.warning(
+                "builtin rev-list 与 main_count 相同，异常；请人工核对 pin。"
+            )
+
+        # 校验公式与期望 versionCode 一致
+        computed = SUKISU_VERSION_BASE + int(main_count) - SUKISU_VERSION_OFFSET
+        if computed != want_vc:
+            raise RuntimeError(
+                f"versionCode 公式不一致：40000+{main_count}-2815={computed} != want {want_vc}"
+            )
+        if computed == 37973 or int(main_count) == 788:
+            raise RuntimeError(
+                "拒绝错误映射：检测到旧的 37973/788 路径（builtin rev-list 误用）。"
+            )
+        if want_vc != EXPECTED_KSU_VERSION_CODE and self.config.sukisu_mode == "ci":
+            logger.warning(
+                f"CI 模式下 manager_version_code={want_vc} 与默认 "
+                f"{EXPECTED_KSU_VERSION_CODE} 不同，将按输入覆盖。"
+            )
 
         version_files = [
             ksu_dir / "kernel" / "Makefile",
@@ -160,41 +211,61 @@ class BuilderMix1:
                 continue
             new_text = re.sub(
                 r"LOCAL_COUNT\s*:=.*",
-                f"LOCAL_COUNT     := {local_count}",
+                f"LOCAL_COUNT     := {main_count}",
                 text,
+                count=1,
+            )
+            # 同时切断 GitHub API 实时统计（GITHUB_COMMITS），避免覆盖 LOCAL_COUNT。
+            new_text = re.sub(
+                r"GITHUB_COMMITS\s*:=.*",
+                "GITHUB_COMMITS   :=",
+                new_text,
                 count=1,
             )
             if new_text != text:
                 version_file.write_text(new_text)
                 logger.info(
-                    f"已锁定 KernelSU 版本计数 LOCAL_COUNT = {local_count} @ {version_file}"
+                    f"已锁定 KernelSU 版本计数 LOCAL_COUNT = {main_count} "
+                    f"(versionCode={computed}) @ {version_file}"
                 )
                 locked = True
+                # 二次确认文件内不是 788
+                if re.search(r"LOCAL_COUNT\s*:=\s*788\b", new_text):
+                    raise RuntimeError(f"{version_file} 仍含 LOCAL_COUNT:=788，拒绝继续")
+                if not re.search(rf"LOCAL_COUNT\s*:=\s*{main_count}\b", new_text):
+                    raise RuntimeError(
+                        f"{version_file} 未能写入 LOCAL_COUNT:={main_count}，拒绝继续"
+                    )
                 break
         if not locked:
-            logger.warning(
-                "未找到可锁定的 LOCAL_COUNT（kernel/Makefile 或 Kbuild），版本号可能仍依赖实时统计"
+            raise RuntimeError(
+                "未找到可锁定的 LOCAL_COUNT（kernel/Makefile 或 Kbuild）。"
+                "禁止继续——否则 versionCode 会漂到错误值。"
             )
 
-        # 计算期望的版本号（VERSION_BASE=40000, VERSION_OFFSET=2815，与管理器 build.gradle.kts 一致）。
-        try:
-            self.expected_ksu_version_code = 40000 + int(local_count) - 2815
-            logger.info(f"期望 KSU/管理器 versionCode = {self.expected_ksu_version_code}")
-        except ValueError:
-            self.expected_ksu_version_code = None
+        self.expected_ksu_version_code = computed
+        logger.info(
+            f"期望 KSU/管理器 versionCode = {self.expected_ksu_version_code} "
+            f"(manager APK 基准 40838 / {SUKISU_MANAGER_CI_LABEL})"
+        )
+        if self.expected_ksu_version_code != want_vc:
+            raise RuntimeError(
+                f"expected_ksu_version_code {self.expected_ksu_version_code} != "
+                f"manager_version_code {want_vc}"
+            )
 
         # 立刻检查 KSU_SUSFS，防止跑到后面才失败。
         kconfig_files = list(ksu_dir.rglob("Kconfig*"))
         if not kconfig_files:
-            raise RuntimeError(f"SukiSU builtin 检查失败：KernelSU 目录里没有 Kconfig 文件: {ksu_dir}")
+            raise RuntimeError(
+                f"SukiSU builtin 检查失败：KernelSU 目录里没有 Kconfig 文件: {ksu_dir}"
+            )
 
         kconfig_hit = False
         kconfig_hit_file = None
-
         for candidate in kconfig_files:
             with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-
             if "KSU_SUSFS" in content:
                 kconfig_hit = True
                 kconfig_hit_file = candidate
@@ -206,15 +277,30 @@ class BuilderMix1:
                 "说明 builtin 分支也没有拉到带 SUSFS 的 KernelSU，禁止继续生成包。"
             )
 
+        # susfs_init 接入检查
+        init_hit = any(
+            "susfs_init" in p.read_text(errors="ignore")
+            for p in ksu_dir.rglob("*.c")
+        )
+        if not init_hit:
+            raise RuntimeError(
+                "SukiSU builtin 检查失败：源码里没有 susfs_init，禁止继续。"
+            )
+
         logger.info(f"SukiSU builtin KSU_SUSFS check passed: {kconfig_hit_file}")
+        logger.info("SukiSU builtin susfs_init check passed")
 
         self._chdir(self.work_dir)
 
-        if self.config.kernelsu_commit:
+        if self.config.kernelsu_commit and self.config.kernelsu_commit not in (
+            pin_commit,
+            head,
+            head[:12],
+            pin_commit[:12],
+        ):
             logger.warning(
-                f"已忽略工作流填写的 KernelSU commit（{self.config.kernelsu_commit}）："
-                f"本仓库将 SukiSU 固定到 {SUKISU_PIN_REF} ({SUKISU_PIN_COMMIT})，"
-                "以保证内核驱动与管理器 APK 同源。"
+                f"工作流填写的 kernelsu_commit={self.config.kernelsu_commit} "
+                f"与有效 builtin pin={pin_commit} 不同；已使用 pin。"
             )
 
     def add_bbg(self):

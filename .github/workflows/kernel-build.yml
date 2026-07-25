@@ -55,6 +55,34 @@ on:
         required: false
         type: string
         default: ''
+      sukisu_mode:
+        description: 'SukiSU 模式：ci=管理器 main/40838 + builtin 源码；stable=稳定同源'
+        required: true
+        type: choice
+        options:
+          - ci
+          - stable
+        default: ci
+      manager_commit:
+        description: '管理器 main commit（ci_3653 / 40838 默认 f1e24b66...）'
+        required: false
+        type: string
+        default: 'f1e24b66057d774888f80ea95fab4cfebb9612fe'
+      manager_version_code:
+        description: '管理器 versionCode 基准（默认 40838）'
+        required: false
+        type: string
+        default: '40838'
+      manager_ci_run:
+        description: '管理器 CI 标签（ci_3653 = main rev-list count）'
+        required: false
+        type: string
+        default: 'ci_3653'
+      kernel_builtin_commit:
+        description: '内核 builtin 源码 commit（含 KSU_SUSFS）'
+        required: false
+        type: string
+        default: 'b1d534bc41941b2c818d7a1a1dac341e4aabfc2d'
       susfs_commit:
         description: '指定 SUSFS commit hash'
         required: false
@@ -169,6 +197,11 @@ jobs:
           [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
           [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
           [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
+          ARGS="$ARGS --sukisu-mode=${{ github.event.inputs.sukisu_mode }}"
+          [ -z "${{ github.event.inputs.manager_commit }}" ] || ARGS="$ARGS --manager-commit=${{ github.event.inputs.manager_commit }}"
+          [ -z "${{ github.event.inputs.manager_version_code }}" ] || ARGS="$ARGS --manager-version-code=${{ github.event.inputs.manager_version_code }}"
+          [ -z "${{ github.event.inputs.manager_ci_run }}" ] || ARGS="$ARGS --manager-ci-run=${{ github.event.inputs.manager_ci_run }}"
+          [ -z "${{ github.event.inputs.kernel_builtin_commit }}" ] || ARGS="$ARGS --kernel-builtin-commit=${{ github.event.inputs.kernel_builtin_commit }}"
           [ "${{ github.event.inputs.make_release }}" = "true" ] || ARGS="$ARGS --no-release"
 
           python3 build.py $ARGS
@@ -181,28 +214,27 @@ jobs:
           find /tmp/gki-build -name "source-manifest.txt" -type f -exec cp {} artifacts/ \;
           find /tmp/gki-build -name "*AnyKernel3.zip.filelist.txt" -type f -exec cp {} artifacts/ \;
 
-      - name: Build SukiSU manager APK (same commit as driver)
-        continue-on-error: true
+      - name: Build SukiSU manager APK (main pin / 40838)
+        env:
+          SUKISU_MANAGER_COMMIT: ${{ github.event.inputs.manager_commit }}
+          SUKISU_MANAGER_VERSION_CODE: ${{ github.event.inputs.manager_version_code }}
         run: |
+          set -euo pipefail
           cd ./.github/workflows/scripts
-          python3 build_manager_apk.py "$GITHUB_WORKSPACE/artifacts" || echo "manager APK 构建失败（非致命，可后续单独出）"
+          python3 build_manager_apk.py "$GITHUB_WORKSPACE/artifacts"
 
-      - name: Verify manager == driver commit
+      - name: Hard gate manager/driver/API versionCode
+        env:
+          WANT_VC: ${{ github.event.inputs.manager_version_code }}
+          MANAGER_COMMIT_TXT: ${{ github.workspace }}/artifacts/manager-commit.txt
         run: |
-          cd ./.github/workflows/scripts
+          set -euo pipefail
           MANIFEST=$(find /tmp/gki-build -name source-manifest.txt | head -1)
-          echo "source-manifest: $MANIFEST"; cat "$MANIFEST" || true
-          if [ -f "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" ]; then
-            cat "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
-            MGR=$(grep -oE 'sukisu_commit=[0-9a-f]+' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" | cut -d= -f2)
-            DRV=$(python3 -c "import json,glob;print(json.load(open(glob.glob('/tmp/gki-build/**/source-manifest.txt',recursive=True)[0]))['sukisu_resolved_commit'] or '')")
-            echo "manager=$MGR driver=$DRV"
-            if [ -n "$MGR" ] && [ -n "$DRV" ] && [ "$MGR" != "$DRV" ]; then
-              echo "::error::manager($MGR) 与 driver($DRV) 不同源"; exit 1
-            fi
-          else
-            echo "未构建管理器 APK，跳过同源核对"
-          fi
+          echo "source-manifest: $MANIFEST"
+          test -f "$MANIFEST"
+          cat "$MANIFEST"
+          cd ./.github/workflows/scripts
+          python3 verify_manager_driver_gate.py
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -221,12 +253,16 @@ jobs:
         if: ${{ github.event.inputs.make_release == 'true' && success() }}
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: aurora-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}-${{ github.run_number }}
-          name: "GKI ${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }} SukiSU+SUSFS (aurora) #${{ github.run_number }}"
+          tag_name: aurora-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}-CI${{ github.event.inputs.manager_version_code }}-${{ github.run_number }}
+          name: "GKI ${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }} SukiSU-CI${{ github.event.inputs.manager_version_code }} matched SUSFS2.2 KPM LZ4KD BBR (aurora) #${{ github.run_number }}"
           body: |
             自动构建的 aurora (Xiaomi 14 Ultra 国行) GKI 内核包。
             - 内核: android14-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}（ACK tag 固定 + SUBLEVEL 门禁）
-            - SukiSU-Ultra: builtin@b1d534bc（含 KSU_SUSFS；驱动固定 commit）
+            - SukiSU mode: ${{ github.event.inputs.sukisu_mode }}
+            - Manager baseline: versionCode ${{ github.event.inputs.manager_version_code }} / ${{ github.event.inputs.manager_ci_run }} @ ${{ github.event.inputs.manager_commit }}
+            - Kernel source: builtin@${{ github.event.inputs.kernel_builtin_commit }}（含 KSU_SUSFS）
+            - Driver versionCode: 强制与 manager 一致（禁止 37973 旧映射）
+            - 旧 aurora 产物若为 driver 37973：FAILED / DO NOT FLASH
             - SUSFS: v2.2.0（读实际源码校验）
             - AK3 仅替换 boot 分区内核 Image；init_boot 不改动。
             详见附件 source-manifest.txt / SHA256SUMS.txt。
