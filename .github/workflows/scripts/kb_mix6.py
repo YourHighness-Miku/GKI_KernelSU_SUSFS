@@ -31,8 +31,22 @@ class BuilderMix6:
             raise RuntimeError(f"AK3: 未找到本次构建的 Image: {image_path}")
 
         import shutil
-        zip_name = (f"{self.config.android_version}-{self.config.kernel_version}."
-                    f"{self.config.sub_level}-{self.config.os_patch_level}-AnyKernel3.zip")
+        # Prefer explicit CI40838 matched name for aurora rebuilds.
+        if (
+            self.config.android_version == "android14"
+            and self.config.kernel_version == "6.1"
+            and str(self.config.sub_level) == "138"
+            and int(self.expected_ksu_version_code or 0) == 40838
+        ):
+            zip_name = (
+                "android14-6.1.138-aurora-SukiSU-CI40838-matched-"
+                "SUSFS2.2-KPM-LZ4KD-BBR-AnyKernel3.zip"
+            )
+        else:
+            zip_name = (
+                f"{self.config.android_version}-{self.config.kernel_version}."
+                f"{self.config.sub_level}-{self.config.os_patch_level}-AnyKernel3.zip"
+            )
 
         # 每次构建使用全新临时目录，避免上一轮残留污染（修复 八.11 / 十八）。
         stage = self.work_dir / "ak3_stage"
