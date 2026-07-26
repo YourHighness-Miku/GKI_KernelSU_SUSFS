@@ -89,16 +89,13 @@ ANDROID_KERNEL_MAP = {
 
 # 仓库配置
 # ---------------------------------------------------------------------------
-# SukiSU 版本映射（2026-07-25 定向修复 40838 vs 37973）
+# SukiSU 版本映射（2026-07-25 更新：管理器升级到 40856）
 #
 # 管理器 APK（用户现网基准，不可降级）:
-#   SukiSU_v4.1.3_40838-release.apk
-#   package=com.sukisu.ultra, versionName=v4.1.3, versionCode=40838
-#   签名 DN=CN=shirkneko,O=shirkneko  SHA-256=947ae944...
-#   官方 main 分支 tip：f1e24b66057d774888f80ea95fab4cfebb9612fe
-#   标题：feat: manager: Add in-app language switcher (#916)
-#   rev-list --count main = 3653  →  versionCode = 40000 + 3653 - 2815 = 40838
-#   用户所说 ci_3653 就是该提交计数（不是 GitHub Actions run_number）
+#   SukiSU v4.1.3，versionCode=40856（截图确认：管理器 40856 vs 旧驱动 40838 不匹配）
+#   package=com.sukisu.ultra, versionName=v4.1.3
+#   官方 main 分支 tip：35467545b2826e3acfc88699755981a889956b1a
+#   rev-list --count main = 3671  →  versionCode = 40000 + 3671 - 2815 = 40856
 #
 # 内核驱动 versionCode 官方公式（kernel/Makefile / manager/build.gradle.kts）:
 #   KSU_VERSION / versionCode = VERSION_BASE(40000) + rev-list --count main - VERSION_OFFSET(2815)
@@ -106,28 +103,26 @@ ANDROID_KERNEL_MAP = {
 #
 # 内核源码（SUSFS 集成）:
 #   builtin 分支才带 KSU_SUSFS Kconfig + susfs_init；main/v4.1.3 tag 不含 KSU_SUSFS。
-#   因此内核源码 pin 到 builtin@b1d534bc...（含 SUSFS），但 LOCAL_COUNT 必须用 main 的 3653，
+#   因此内核源码 pin 到 builtin@b1d534bc...（含 SUSFS），但 LOCAL_COUNT 必须用 main 的 3671，
 #   绝不能用 builtin 本地 rev-list --count HEAD(=788 → 错误的 37973)。
 #
-# 上一轮失败根因（FAILED / DO NOT FLASH）:
-#   add_kernelsu() 执行了 `git branch -f main HEAD`，把 main 指到 builtin commit，
-#   再用 `rev-list --count HEAD` 锁 LOCAL_COUNT=788 → driver 37973，管理器 40838 红色不匹配。
+# 历史：管理器 40838(count=3653) → 现升级到 40856(count=3671)，仅版本号提升，源码结构不变。
 # ---------------------------------------------------------------------------
 
 # 内核源码 pin：builtin + SUSFS
 SUKISU_PIN_REF = "builtin"
 SUKISU_PIN_COMMIT = "b1d534bc41941b2c818d7a1a1dac341e4aabfc2d"
 
-# 管理器 pin：main CI/测试版 40838
+# 管理器 pin：main CI/测试版 40856
 SUKISU_MANAGER_PIN_REF = "main"
-SUKISU_MANAGER_PIN_COMMIT = "f1e24b66057d774888f80ea95fab4cfebb9612fe"
-SUKISU_MANAGER_CI_LABEL = "ci_3653"  # = main rev-list count at manager pin
+SUKISU_MANAGER_PIN_COMMIT = "35467545b2826e3acfc88699755981a889956b1a"
+SUKISU_MANAGER_CI_LABEL = "ci_3671"  # = main rev-list count at manager pin
 SUKISU_VERSION_BASE = 40000
 SUKISU_VERSION_OFFSET = 2815
 # 官方 main 在 manager pin 上的提交数（硬门禁；禁止再按 builtin HEAD 重算）
-SUKISU_MAIN_COMMIT_COUNT = 3653
-EXPECTED_KSU_VERSION_CODE = SUKISU_VERSION_BASE + SUKISU_MAIN_COMMIT_COUNT - SUKISU_VERSION_OFFSET  # 40838
-assert EXPECTED_KSU_VERSION_CODE == 40838
+SUKISU_MAIN_COMMIT_COUNT = 3671
+EXPECTED_KSU_VERSION_CODE = SUKISU_VERSION_BASE + SUKISU_MAIN_COMMIT_COUNT - SUKISU_VERSION_OFFSET  # 40856
+assert EXPECTED_KSU_VERSION_CODE == 40856
 
 # 模式：stable = 稳定 tag 同源；ci = 管理器 main CI + builtin 内核源码 + main 计数
 SUKISU_MODE_STABLE = "stable"

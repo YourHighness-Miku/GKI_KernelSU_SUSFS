@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """构建 SukiSU-Ultra 管理器 APK（从 main manager pin，不是 builtin）。
 
-- checkout main manager pin (ci_3653 / 40838)
+- checkout main manager pin (ci_3671 / 40856)
 - 配置 ANDROID_HOME / local.properties（Maximize space 会删掉默认 Android SDK）
 - Gradle assembleRelease/Debug
 - 写出 manager-commit.txt；versionCode 必须匹配基准

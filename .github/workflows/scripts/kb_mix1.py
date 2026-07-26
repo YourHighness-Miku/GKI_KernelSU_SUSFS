@@ -115,8 +115,8 @@ class BuilderMix1:
 
         关键兼容规则（官方）:
           versionCode = 40000 + rev-list --count main - 2815
-        管理器 40838 对应 main tip f1e24b66（count=3653 / ci_3653）。
-        内核源码必须用 builtin（含 KSU_SUSFS），但 LOCAL_COUNT 必须是 main 的 3653，
+        管理器 40856 对应 main tip 35467545（count=3671 / ci_3671）。
+        内核源码必须用 builtin（含 KSU_SUSFS），但 LOCAL_COUNT 必须是 main 的 3671，
         绝不能 `git branch -f main HEAD` 后对 builtin 做 rev-list（那会得到 788→37973）。
         """
         pin_commit = self.config.effective_kernel_builtin_commit()
@@ -164,10 +164,10 @@ class BuilderMix1:
         self.resolved_manager_commit = manager_commit
         self.resolved_main_commit_count = main_count
 
-        # === 版本号硬锁定（修复 40838 vs 37973）===
+        # === 版本号硬锁定（对齐管理器 versionCode）===
         # 官方 Makefile 用 REPO_BRANCH=main 的提交数算 KSU_VERSION。
         # 禁止：git branch -f main HEAD（会把 main 指到 builtin，count 变成 788）。
-        # 正确：LOCAL_COUNT 强制为 main 在 manager pin 上的提交数 3653。
+        # 正确：LOCAL_COUNT 强制为 main 在 manager pin 上的提交数（见 config）。
         builtin_count = subprocess.run(
             "git rev-list --count HEAD", shell=True, capture_output=True, text=True
         ).stdout.strip()
@@ -246,7 +246,7 @@ class BuilderMix1:
         self.expected_ksu_version_code = computed
         logger.info(
             f"期望 KSU/管理器 versionCode = {self.expected_ksu_version_code} "
-            f"(manager APK 基准 40838 / {SUKISU_MANAGER_CI_LABEL})"
+            f"(manager APK 基准 {want_vc} / {SUKISU_MANAGER_CI_LABEL})"
         )
         if self.expected_ksu_version_code != want_vc:
             raise RuntimeError(

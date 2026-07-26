@@ -5,9 +5,16 @@ import glob
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from config import EXPECTED_KSU_VERSION_CODE, SUKISU_MAIN_COMMIT_COUNT
+except Exception:  # pragma: no cover
+    EXPECTED_KSU_VERSION_CODE = 40856
+    SUKISU_MAIN_COMMIT_COUNT = 3671
+
 
 def main() -> int:
-    want = int(os.environ.get('WANT_VC', '40838'))
+    want = int(os.environ.get('WANT_VC') or EXPECTED_KSU_VERSION_CODE)
     paths = glob.glob('/tmp/gki-build/**/source-manifest.txt', recursive=True)
     if not paths:
         print('::error::source-manifest.txt not found under /tmp/gki-build')
@@ -27,8 +34,13 @@ def main() -> int:
     if got == 37973:
         print('::error::legacy failed driver 37973 (FAILED / DO NOT FLASH)')
         return 1
-    if m.get('sukisu_main_commit_count') not in (3653, '3653'):
-        print(f"::error::main commit count not 3653: {m.get('sukisu_main_commit_count')}")
+    if m.get('sukisu_main_commit_count') not in (
+        SUKISU_MAIN_COMMIT_COUNT, str(SUKISU_MAIN_COMMIT_COUNT)
+    ):
+        print(
+            f"::error::main commit count not {SUKISU_MAIN_COMMIT_COUNT}: "
+            f"{m.get('sukisu_main_commit_count')}"
+        )
         return 1
     mgr_txt = os.environ.get('MANAGER_COMMIT_TXT', '')
     if mgr_txt and os.path.isfile(mgr_txt):

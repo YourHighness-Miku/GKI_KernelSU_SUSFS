@@ -11,7 +11,8 @@ from typing import Optional
 from config import (KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
                    LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL,
-                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION)
+                   SUKISU_PIN_REF, SUKISU_PIN_COMMIT, EXPECTED_SUSFS_VERSION,
+                   EXPECTED_KSU_VERSION_CODE, SUKISU_MAIN_COMMIT_COUNT)
 from kb_types import BuildResult
 
 logger = logging.getLogger(__name__)
@@ -215,8 +216,12 @@ class BuilderMix4:
         mf = ksu_makefile.read_text(errors="ignore")
         if re.search(r"LOCAL_COUNT\s*:=\s*788\b", mf):
             raise RuntimeError("KernelSU Makefile 仍含 LOCAL_COUNT:=788 → 37973。拒绝打包。")
-        if want_vc == 40838 and not re.search(r"LOCAL_COUNT\s*:=\s*3653\b", mf):
-            raise RuntimeError("KernelSU Makefile 未锁定 LOCAL_COUNT:=3653。拒绝打包。")
+        if want_vc == EXPECTED_KSU_VERSION_CODE and not re.search(
+            rf"LOCAL_COUNT\s*:=\s*{SUKISU_MAIN_COMMIT_COUNT}\b", mf
+        ):
+            raise RuntimeError(
+                f"KernelSU Makefile 未锁定 LOCAL_COUNT:={SUKISU_MAIN_COMMIT_COUNT}。拒绝打包。"
+            )
 
         strings_out = subprocess.run(
             f"strings -a '{image}'",
@@ -287,15 +292,17 @@ class BuilderMix4:
             )
             evidence.append("full_version_present_without_pin_match")
 
-        if want_vc != 40838 and self.config.sukisu_mode == "ci":
-            logger.warning(f"CI 模式期望通常为 40838，当前 want_vc={want_vc}")
+        if want_vc != EXPECTED_KSU_VERSION_CODE and self.config.sukisu_mode == "ci":
+            logger.warning(
+                f"CI 模式期望通常为 {EXPECTED_KSU_VERSION_CODE}，当前 want_vc={want_vc}"
+            )
         if want_vc == 37973:
             raise RuntimeError("expected driver 37973 被禁止。FAILED / DO NOT FLASH。")
 
         logger.info(f"manager/driver versionCode 门禁通过：{want_vc} evidence={evidence}")
 
     def verify_manager_driver_gate(self, artifacts_dir: Optional[Path] = None):
-        """打包/Release 前硬门禁：manager versionCode == driver versionCode == 40838（CI 模式）。"""
+        """打包/Release 前硬门禁：manager versionCode == driver versionCode（CI 模式对齐管理器）。"""
         want = self.config.effective_manager_version_code()
         got = self.expected_ksu_version_code
         if got is None:
@@ -306,9 +313,9 @@ class BuilderMix4:
             )
         if int(got) == 37973:
             raise RuntimeError("driver 仍为 37973（旧错误映射）。FAILED / DO NOT FLASH。")
-        if self.config.sukisu_mode == "ci" and int(got) != 40838:
+        if self.config.sukisu_mode == "ci" and int(got) != EXPECTED_KSU_VERSION_CODE:
             raise RuntimeError(
-                f"CI 模式强制 driver versionCode=40838，实际 {got}。拒绝发布。"
+                f"CI 模式强制 driver versionCode={EXPECTED_KSU_VERSION_CODE}，实际 {got}。拒绝发布。"
             )
         # 源码侧 LOCAL_COUNT 再核对
         ksu_makefile = self.work_dir / "KernelSU" / "kernel" / "Makefile"
@@ -316,9 +323,11 @@ class BuilderMix4:
             text = ksu_makefile.read_text(errors="ignore")
             if re.search(r"LOCAL_COUNT\s*:=\s*788\b", text):
                 raise RuntimeError("KernelSU Makefile 仍含 LOCAL_COUNT:=788，拒绝发布")
-            if not re.search(r"LOCAL_COUNT\s*:=\s*3653\b", text) and int(got) == 40838:
+            if not re.search(
+                rf"LOCAL_COUNT\s*:=\s*{SUKISU_MAIN_COMMIT_COUNT}\b", text
+            ) and int(got) == EXPECTED_KSU_VERSION_CODE:
                 raise RuntimeError(
-                    "KernelSU Makefile 未锁定 LOCAL_COUNT:=3653，拒绝发布"
+                    f"KernelSU Makefile 未锁定 LOCAL_COUNT:={SUKISU_MAIN_COMMIT_COUNT}，拒绝发布"
                 )
         logger.info(
             f"manager/driver 硬门禁通过：versionCode={got}, "

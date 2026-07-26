@@ -56,7 +56,7 @@ on:
         type: string
         default: ''
       sukisu_mode:
-        description: 'SukiSU 模式：ci=管理器 main/40838 + builtin 源码；stable=稳定同源'
+        description: 'SukiSU 模式：ci=管理器 main/40856 + builtin 源码；stable=稳定同源'
         required: true
         type: choice
         options:
@@ -64,20 +64,20 @@ on:
           - stable
         default: ci
       manager_commit:
-        description: '管理器 main commit（ci_3653 / 40838 默认 f1e24b66...）'
+        description: '管理器 main commit（ci_3671 / 40856 默认 35467545...）'
         required: false
         type: string
-        default: 'f1e24b66057d774888f80ea95fab4cfebb9612fe'
+        default: '35467545b2826e3acfc88699755981a889956b1a'
       manager_version_code:
-        description: '管理器 versionCode 基准（默认 40838）'
+        description: '管理器 versionCode 基准（默认 40856）'
         required: false
         type: string
-        default: '40838'
+        default: '40856'
       manager_ci_run:
-        description: '管理器 CI 标签（ci_3653 = main rev-list count）'
+        description: '管理器 CI 标签（ci_3671 = main rev-list count）'
         required: false
         type: string
-        default: 'ci_3653'
+        default: 'ci_3671'
       kernel_builtin_commit:
         description: '内核 builtin 源码 commit（含 KSU_SUSFS）'
         required: false
@@ -218,8 +218,8 @@ jobs:
           if ls artifacts/*AnyKernel3.zip >/dev/null 2>&1; then
             for z in artifacts/*AnyKernel3.zip; do
               base=$(basename "$z")
-              if [[ "$base" != *"CI40838"* ]]; then
-                cp -v "$z" "artifacts/android14-6.1.138-aurora-SukiSU-CI40838-matched-SUSFS2.2-KPM-LZ4KD-BBR-AnyKernel3.zip"
+              if [[ "$base" != *"CI40856"* ]]; then
+                cp -v "$z" "artifacts/android14-6.1.138-aurora-SukiSU-CI40856-matched-SUSFS2.2-KPM-LZ4KD-BBR-AnyKernel3.zip"
               fi
             done
           fi
@@ -231,7 +231,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Build SukiSU manager APK (main pin / 40838)
+      - name: Build SukiSU manager APK (main pin / 40856)
         env:
           SUKISU_MANAGER_COMMIT: ${{ github.event.inputs.manager_commit }}
           SUKISU_MANAGER_VERSION_CODE: ${{ github.event.inputs.manager_version_code }}
@@ -251,8 +251,8 @@ jobs:
           sukisu_manager_ci=${{ github.event.inputs.manager_ci_run }}
           sukisu_kernel_builtin_ref=builtin
           sukisu_kernel_builtin_commit=${{ github.event.inputs.kernel_builtin_commit }}
-          commit_count=3653
-          expected_version_code=40838
+          commit_count=3671
+          expected_version_code=40856
           manager_version_code_baseline=${{ github.event.inputs.manager_version_code }}
           apk_build_status=metadata_only
           note=official_user_apk_is_baseline_local_build_optional
@@ -263,7 +263,7 @@ jobs:
           # normalize indentation just in case
           sed -i 's/^[[:space:]]*//' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
           cat "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
-          grep -E '^expected_version_code=40838$' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+          grep -E '^expected_version_code=40856$' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
 
       - name: Hard gate manager/driver/API versionCode
         env:
