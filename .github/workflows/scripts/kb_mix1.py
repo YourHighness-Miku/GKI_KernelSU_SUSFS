@@ -290,6 +290,9 @@ class BuilderMix1:
         logger.info(f"SukiSU builtin KSU_SUSFS check passed: {kconfig_hit_file}")
         logger.info("SukiSU builtin susfs_init check passed")
 
+        # 修复 SukiSU 音量键误触发 safe mode（boot 完成后仍被 vol-key 触发）。
+        self._fix_ksu_safemode_volkey(ksu_dir)
+
         self._chdir(self.work_dir)
 
         if self.config.kernelsu_commit and self.config.kernelsu_commit not in (
@@ -302,6 +305,117 @@ class BuilderMix1:
                 f"工作流填写的 kernelsu_commit={self.config.kernelsu_commit} "
                 f"与有效 builtin pin={pin_commit} 不同；已使用 pin。"
             )
+
+    def _fix_ksu_safemode_volkey(self, ksu_dir: Path):
+        """彻底修复 SukiSU 音量键在 boot 完成后仍误触发 safe mode 的问题。
+
+        触发链（SukiSU builtin, kernel/runtime/ksud.c）:
+          vol_detector_init() 注册全局 input handler -> vol_detector_event()
+          每次音量键累加计数, 任一 >=3 次即 safe_mode_flag=true -> ksu_is_safe_mode()。
+
+        SUSFS 编译路径的缺陷:
+          on_post_fs_data()/ksu_is_safe_mode() 只 static_branch_disable() 关 static key,
+          从不 vol_detector_exit() 注销 handler; 且 vol_detector_event() 回调里既不查
+          static key 也不查 ksu_boot_completed。结果 handler 常驻, 开机后任意时刻狂按
+          音量键都会触发 safe mode。
+
+        三重防御（任一层生效即可, 合起来保证 boot 后 100% 不误触发）:
+          1) vol_detector_event() 开头: ksu_boot_completed 为真 -> 直接 return;
+          2) 同处: input hook 已被禁用(static key / ksu_input_hook) -> 直接 return;
+          3) SUSFS 分支补上 stop_input_hook(), 在 post-fs-data / check_safemode 时
+             真正注销 handler（与非 SUSFS 分支行为一致, 安全: 非 input 回调上下文）。
+
+        保留开机早期（post-fs-data 之前）的合法救砖窗口; 不动 root/模块/SELinux/SUSFS。
+        任一锚点缺失即 raise, 绝不静默跳过——保证补丁真正落地。
+        """
+        ksud = ksu_dir / "kernel" / "runtime" / "ksud.c"
+        if not ksud.exists():
+            raise RuntimeError(
+                f"safe-mode 修复失败：未找到 ksud.c: {ksud}。"
+                "SukiSU 源码结构可能已变，拒绝在未修复的情况下继续。"
+            )
+        src = ksud.read_text(errors="ignore")
+        orig = src
+
+        # 前置校验：确认这确实是含 vol_detector 的版本，否则说明上游已重构。
+        for anchor in (
+            "static void vol_detector_event(",
+            "bool ksu_boot_completed",
+            "static void stop_input_hook(void)",
+        ):
+            if anchor not in src:
+                raise RuntimeError(
+                    f"safe-mode 修复失败：ksud.c 缺少锚点 '{anchor}'，"
+                    "上游结构已变，拒绝继续（避免生成未修复的包）。"
+                )
+
+        # --- 层 1+2：在 vol_detector_event 开头插入守卫 ---
+        event_anchor = (
+            "static void vol_detector_event(struct input_handle *handle, "
+            "unsigned int type, unsigned int code, int value)\n"
+            "{\n"
+            "    static int vol_up_cnt = 0;\n"
+            "    static int vol_down_cnt = 0;\n"
+        )
+        if event_anchor not in src:
+            raise RuntimeError(
+                "safe-mode 修复失败：vol_detector_event 函数头与预期不符，拒绝继续。"
+            )
+        event_guard = event_anchor + (
+            "\n"
+            "    /* aurora fix: never trigger KSU safe mode after boot completed */\n"
+            "    if (ksu_boot_completed)\n"
+            "        return;\n"
+            "\n"
+            "    /* aurora fix: stop counting once the input hook is disabled */\n"
+            "#if defined(CONFIG_KSU_SUSFS) && defined(KSU_COMPAT_USE_STATIC_KEY)\n"
+            "    if (!static_branch_likely(&ksu_is_input_hook_enabled))\n"
+            "        return;\n"
+            "#else\n"
+            "    if (!ksu_input_hook)\n"
+            "        return;\n"
+            "#endif\n"
+        )
+        src = src.replace(event_anchor, event_guard, 1)
+
+        # --- 层 3：SUSFS 分支补上真正的 handler 注销 ---
+        # 该段在 on_post_fs_data() 与 ksu_is_safe_mode() 中各出现一次，两处都要补。
+        susfs_disable_block = (
+            "    if (static_key_enabled(&ksu_is_input_hook_enabled)) {\n"
+            "        static_branch_disable(&ksu_is_input_hook_enabled);\n"
+            "        pr_info(\"ksu_input_hook is disabled\\n\");\n"
+            "    }\n"
+        )
+        occurrences = src.count(susfs_disable_block)
+        if occurrences < 1:
+            raise RuntimeError(
+                "safe-mode 修复失败：未找到 SUSFS input-hook disable 代码块，拒绝继续。"
+            )
+        susfs_disable_fixed = susfs_disable_block + (
+            "    /* aurora fix: fully unregister the volume-key input handler */\n"
+            "    stop_input_hook();\n"
+        )
+        src = src.replace(susfs_disable_block, susfs_disable_fixed)
+
+        if src == orig:
+            raise RuntimeError("safe-mode 修复失败：未产生任何改动，拒绝继续。")
+
+        ksud.write_text(src)
+
+        # 事后硬校验：三层守卫必须都落地。
+        checks = {
+            "boot_completed guard": "if (ksu_boot_completed)\n        return;",
+            "hook-disabled guard": "if (!ksu_input_hook)\n        return;",
+            "handler unregister": "/* aurora fix: fully unregister the volume-key input handler */",
+        }
+        missing = [name for name, needle in checks.items() if needle not in src]
+        if missing:
+            raise RuntimeError(
+                "safe-mode 修复自检失败，缺少: " + ", ".join(missing) + "。拒绝继续。"
+            )
+        logger.info(
+            f"KSU safe-mode 音量键修复已应用（{occurrences} 处 SUSFS 分支 + 回调双守卫）: {ksud}"
+        )
 
     def add_bbg(self):
         if not self.config.use_bbg:
