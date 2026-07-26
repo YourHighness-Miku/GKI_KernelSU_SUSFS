@@ -1,0 +1,34 @@
+patch-list.txt — 本构建应用的补丁/源码注入清单（含固定来源值，均已联网核验存在）
+================================================================
+[ACK 内核基线] android14-6.1
+  manifest_branch : common-android14-6.1
+  tag             : android14-6.1.138_r00
+  tag 对象        : 19271efa32de1e9b00efd9f4bb26a18ce4f37ecc (annotated tag)
+  peeled commit   : 4894546596ee3a4b96d9f2157de0d197826cabc0  <= checkout 后校验 HEAD==此值
+  子版本门禁      : Makefile SUBLEVEL 必须 == 138，否则中止
+
+[SukiSU-Ultra（内核驱动 + 管理器 APK 同源）]
+  ref=v4.1.3  commit=0ca744a88835144c58d8256ebb32c279edabfcde
+  版本号锁定: 强制 KernelSU Kbuild LOCAL_COUNT=本地 rev-list，关闭实时 GitHub 统计
+             -> driver 与 manager versionCode 一致（消除 40838/40837 类不一致）
+
+[SUSFS]
+  branch=gki-android14-6.1  版本=v2.2.0（susfs.h 核验）
+  默认固定 commit=090cf407fea14d960cba55ce6f69cc61a146d1b3（避免浮动分支）
+  主补丁: kernel_patches/50_add_susfs_in_gki-android14-6.1.patch
+  版本门禁: 应用前读 susfs.h SUSFS_VERSION 必须 == v2.2.0
+
+[SukiSU_patch（ZRAM/LZ4KD + hide stuff）] ShirkNeko/SukiSU_patch
+  69_hide_stuff.patch（应用，扫 .rej，失败中止）
+  other/zram/zram_patch/6.1/lz4kd.patch（check=True）
+  other/zram/zram_patch/6.1/lz4k_oplus.patch（check=True）
+  lz4k/lz4kd 源码（crypto/lib/include）复制入 common/，复制后断言存在
+
+[task_mmu.c 外科修复] 6.1.138 未使用变量/跳转最小修复（不整块 return 0 跳过），base.c 按需补 dma-buf.h
+
+[KPM]（use_kpm=True 时）defconfig CONFIG_KPM=y；编译后对 Image 应用 KPM patch，必须生成 oImage，否则中止
+
+[未应用] Baseband-guard（BBG）默认关闭；OnePlus 8E（op8e）默认关闭
+
+高 fuzz / 软失败核查: 未用 `|| true` 忽略关键步骤；ZRAM/KPM/SUSFS/编译/AK3/Release 均 check=True 或产物断言；
+                     patch fuzz 上限 -F 3（受控）

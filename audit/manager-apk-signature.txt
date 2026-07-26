@@ -1,0 +1,9 @@
+apksigner verify: Verifies
+schemes: v2=true (v1/v3/v4=false)
+signer_dn: C=zh, ST=gaungdong, L=guangzhou, O=shirkneko, OU=shirkneko, CN=shirkneko
+cert_sha256: 947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
+cert_sha1: 5f4abf5d88a221c7563477e26eec1468332f1e04
+key: RSA 2048
+official_test_signing: yes (shirkneko / SukiSU official signing identity)
+modified: no
+re-signed: no

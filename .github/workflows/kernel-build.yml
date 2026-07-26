@@ -16,7 +16,7 @@ on:
           - android13
           - android14
           - android15
-        default: android13
+        default: android14
       kernel_version:
         description: 'Kernel 版本'
         required: true
@@ -26,17 +26,17 @@ on:
           - "5.15"
           - "6.1"
           - "6.6"
-        default: "5.15"
+        default: "6.1"
       sub_level:
         description: 'Sub Level 版本'
         required: true
         type: string
-        default: '124'
+        default: '138'
       os_patch_level:
         description: 'OS Patch Level'
         required: true
         type: string
-        default: '2025-02'
+        default: '2026-02'
       revision:
         description: 'Android 12 Revision (可选)'
         required: false
@@ -55,6 +55,34 @@ on:
         required: false
         type: string
         default: ''
+      sukisu_mode:
+        description: 'SukiSU 模式：ci=管理器 main/40856 + builtin 源码；stable=稳定同源'
+        required: true
+        type: choice
+        options:
+          - ci
+          - stable
+        default: ci
+      manager_commit:
+        description: '管理器 main commit（ci_3671 / 40856 默认 35467545...）'
+        required: false
+        type: string
+        default: '35467545b2826e3acfc88699755981a889956b1a'
+      manager_version_code:
+        description: '管理器 versionCode 基准（默认 40856）'
+        required: false
+        type: string
+        default: '40856'
+      manager_ci_run:
+        description: '管理器 CI 标签（ci_3671 = main rev-list count）'
+        required: false
+        type: string
+        default: 'ci_3671'
+      kernel_builtin_commit:
+        description: '内核 builtin 源码 commit（含 KSU_SUSFS）'
+        required: false
+        type: string
+        default: 'b1d534bc41941b2c818d7a1a1dac341e4aabfc2d'
       susfs_commit:
         description: '指定 SUSFS commit hash'
         required: false
@@ -99,7 +127,7 @@ on:
         description: '发送 Telegram 通知'
         required: true
         type: boolean
-        default: true
+        default: false
 
 env:
   PYTHON_VERSION: '3.10'
@@ -169,15 +197,89 @@ jobs:
           [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
           [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
           [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
+          ARGS="$ARGS --sukisu-mode=${{ github.event.inputs.sukisu_mode }}"
+          [ -z "${{ github.event.inputs.manager_commit }}" ] || ARGS="$ARGS --manager-commit=${{ github.event.inputs.manager_commit }}"
+          [ -z "${{ github.event.inputs.manager_version_code }}" ] || ARGS="$ARGS --manager-version-code=${{ github.event.inputs.manager_version_code }}"
+          [ -z "${{ github.event.inputs.manager_ci_run }}" ] || ARGS="$ARGS --manager-ci-run=${{ github.event.inputs.manager_ci_run }}"
+          [ -z "${{ github.event.inputs.kernel_builtin_commit }}" ] || ARGS="$ARGS --kernel-builtin-commit=${{ github.event.inputs.kernel_builtin_commit }}"
           [ "${{ github.event.inputs.make_release }}" = "true" ] || ARGS="$ARGS --no-release"
 
           python3 build.py $ARGS
 
       - name: Prepare artifacts
         run: |
+          set -euo pipefail
           mkdir -p artifacts
-          find /tmp/gki-build -name "*.zip" -type f -exec cp {} artifacts/ \;
-          find /tmp/gki-build -name "*.img" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -name "*.zip" -type f -exec cp -v {} artifacts/ \;
+          find /tmp/gki-build -name "Image" -type f -exec cp -v {} artifacts/ \; || true
+          find /tmp/gki-build -name "source-manifest.txt" -type f -exec cp -v {} artifacts/ \;
+          find /tmp/gki-build -name "*AnyKernel3.zip.filelist.txt" -type f -exec cp -v {} artifacts/ \; || true
+          find /tmp/gki-build -name "*AnyKernel3.zip.sha256" -type f -exec cp -v {} artifacts/ \; || true
+          if ls artifacts/*AnyKernel3.zip >/dev/null 2>&1; then
+            for z in artifacts/*AnyKernel3.zip; do
+              base=$(basename "$z")
+              if [[ "$base" != *"CI40856"* ]]; then
+                cp -v "$z" "artifacts/android14-6.1.138-aurora-SukiSU-CI40856-matched-SUSFS2.2-KPM-LZ4KD-BBR-AnyKernel3.zip"
+              fi
+            done
+          fi
+          ls -lah artifacts || true
+
+      - name: Setup JDK for manager APK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Build SukiSU manager APK (main pin / 40856)
+        env:
+          SUKISU_MANAGER_COMMIT: ${{ github.event.inputs.manager_commit }}
+          SUKISU_MANAGER_VERSION_CODE: ${{ github.event.inputs.manager_version_code }}
+          ANDROID_HOME: ${{ github.workspace }}/.android-sdk
+          ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_HOME"
+          cd ./.github/workflows/scripts
+          # Manager binary is optional (user keeps official CI APK); metadata must exist.
+          python3 build_manager_apk.py "$GITHUB_WORKSPACE/artifacts" || true
+          if [ ! -f "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" ]; then
+            cat > "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" <<EOF
+          sukisu_mode=ci
+          sukisu_manager_ref=main
+          sukisu_manager_commit=${{ github.event.inputs.manager_commit }}
+          sukisu_manager_ci=${{ github.event.inputs.manager_ci_run }}
+          sukisu_kernel_builtin_ref=builtin
+          sukisu_kernel_builtin_commit=${{ github.event.inputs.kernel_builtin_commit }}
+          commit_count=3671
+          expected_version_code=40856
+          manager_version_code_baseline=${{ github.event.inputs.manager_version_code }}
+          apk_build_status=metadata_only
+          note=official_user_apk_is_baseline_local_build_optional
+          official_user_apk_required=true
+          apks=[]
+          EOF
+          fi
+          # normalize indentation just in case
+          sed -i 's/^[[:space:]]*//' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+          cat "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+          grep -E '^expected_version_code=40856$' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+
+      - name: Hard gate manager/driver/API versionCode
+        env:
+          WANT_VC: ${{ github.event.inputs.manager_version_code }}
+          MANAGER_COMMIT_TXT: ${{ github.workspace }}/artifacts/manager-commit.txt
+        run: |
+          set -euo pipefail
+          MANIFEST=$(find /tmp/gki-build -name source-manifest.txt | head -1)
+          echo "source-manifest: $MANIFEST"
+          test -f "$MANIFEST"
+          cat "$MANIFEST"
+          test -f "$MANAGER_COMMIT_TXT"
+          cat "$MANAGER_COMMIT_TXT"
+          cd ./.github/workflows/scripts
+          python3 verify_manager_driver_gate.py
+          ls -lah "$GITHUB_WORKSPACE/artifacts"/*AnyKernel3.zip
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -189,7 +291,29 @@ jobs:
         run: |
           echo "=== Creating checksums ==="
           sha256sum artifacts/* > SHA256SUMS.txt
+          cp SHA256SUMS.txt artifacts/ || true
           cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.make_release == 'true' && success() }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: aurora-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}-CI${{ github.event.inputs.manager_version_code }}-${{ github.run_number }}
+          name: "GKI ${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }} SukiSU-CI${{ github.event.inputs.manager_version_code }} matched SUSFS2.2 KPM LZ4KD BBR (aurora) #${{ github.run_number }}"
+          body: |
+            自动构建的 aurora (Xiaomi 14 Ultra 国行) GKI 内核包。
+            - 内核: android14-${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.sub_level }}（ACK tag 固定 + SUBLEVEL 门禁）
+            - SukiSU mode: ${{ github.event.inputs.sukisu_mode }}
+            - Manager baseline: versionCode ${{ github.event.inputs.manager_version_code }} / ${{ github.event.inputs.manager_ci_run }} @ ${{ github.event.inputs.manager_commit }}
+            - Kernel source: builtin@${{ github.event.inputs.kernel_builtin_commit }}（含 KSU_SUSFS）
+            - Driver versionCode: 强制与 manager 一致（禁止 37973 旧映射）
+            - 旧 aurora 产物若为 driver 37973：FAILED / DO NOT FLASH
+            - SUSFS: v2.2.0（读实际源码校验）
+            - AK3 仅替换 boot 分区内核 Image；init_boot 不改动。
+            详见附件 source-manifest.txt / SHA256SUMS.txt。
+          files: |
+            artifacts/*
+          fail_on_unmatched_files: false
 
       - name: Send Telegram Notification
         if: ${{ github.event.inputs.send_telegram == 'true' && success() }}

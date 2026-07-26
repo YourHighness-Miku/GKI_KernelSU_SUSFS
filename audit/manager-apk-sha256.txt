@@ -1,0 +1,14 @@
+SukiSU_v4.1.3_40838-release.apk
+size_bytes=12348880
+size_human=11.78MB
+sha256=3c4a9e7b0795ddfd4084e9dd8ea74eecfe1f21670ff8972b590375846e2ce632
+zip_test=OK
+path=/host/root/workspace/project/81991c0b7d1343bbb2be41f1fc7abf72/SukiSU_v4.1.3_40838-release.apk
+
+boot.img
+size_bytes=100663296
+sha256=1900ce14cf6272a79278577a86d11c3bb0a808971e43bca08ace15b2967c1116
+
+init_boot.img
+size_bytes=8388608
+sha256=332da615ee309a7e611f9576f72d1eb8345518606d6d3dc00da546e81b46d0d6

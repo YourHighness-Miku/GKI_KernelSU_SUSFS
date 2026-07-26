@@ -1,0 +1,24 @@
+version-verification.txt — 官方镜像真机核验 + 产物版本核验方法
+==============================================================
+== 一、官方镜像（真实解析结果）==
+boot.img SHA-256      : 1900ce14cf6272a79278577a86d11c3bb0a808971e43bca08ace15b2967c1116
+init_boot.img SHA-256 : 332da615ee309a7e611f9576f72d1eb8345518606d6d3dc00da546e81b46d0d6
+
+boot.img 头: magic=ANDROID! header_version=4 kernel_size=36481536 ramdisk_size=0
+            os_version=14.0.0 os_patch_level=2026-02
+init_boot.img 头: header_version=4 kernel_size=0 ramdisk_size=2309002 os_version=14.0.0
+
+boot 内核 Image（boot.img 偏移 4096 提取）:
+  首字节 4d 5a 40 fa (MZ+arm64 分支桩，未压缩 raw Image)；ARM64 magic@0x38
+  版本串 : Linux version 6.1.138-android14-11-g965475777129-mi (clang 17.0.2)
+  内嵌配置: CONFIG_IKCONFIG=y（见 stock-boot-kernel.config）
+  页大小 : stock .config CONFIG_ARM64_4K_PAGES=y
+
+结论: 官方内核 6.1.138-android14-11 / ARM64 / 4K / boot header v4 / boot 为 raw Image /
+     boot 无 ramdisk / init_boot 无 kernel => AK3 只替换 boot 的 kernel Image，不动 init_boot。
+
+== 二、产物版本核验方法（构建后执行）==
+kb_mix4.verify_kernel_version(): strings Image | grep 'Linux version'，断言含 6.1.138，否则拒绝打包。
+产物 Image 亦 CONFIG_IKCONFIG=y，可 extract-ikconfig 复核真实 .config，不靠 uname 字符串。
+注意: 本轮未在此沙箱执行正式编译（见 build-report.md C 节），产物 Image 版本核验
+     需在完整 Android 构建主机 / GitHub Actions 工作流运行后完成 —— 【需正式编译后验证】。

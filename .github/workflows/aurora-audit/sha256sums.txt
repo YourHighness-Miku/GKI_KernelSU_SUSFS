@@ -1,0 +1,21 @@
+sha256sums.txt — 本目录审计交付物 + 官方镜像 的 SHA-256
+========================================================
+# 审计交付物（值为本分支已提交 blob 的 sha256）
+6b75032b6ed394b2c13f0c46cba519af39d4254cc3fab3d9f760dff90fd414d8  safe-mode-audit.md
+393a48cca222d0e27b1b7718a0e77e8ae7163ef2671bc90f9de59a77204d3e6b  zram-lz4kd-audit.md
+d746e5ea6ad3fb20b6272380e9109f7f92d94c39c3c2a1a84d280e881d835c90  bbr-audit.md
+e96a3663b1ae96cc7b27ae677614447b643911b6796be8dad5bfdfb92ef43471  patch-list.txt
+6f091eaa3f448702da8ba3b314e3e2d2a2d8539a546d3bcbf2e8a6c6c89d7448  source-manifest.txt
+29c0ae756385d85bcb1849ca73d91ad859c70d69c77a417fefa1c11b1e016f59  version-verification.txt
+7680ea82c809ad9143d4065b00313897401eec6c14095f139a08840609840df9  stock-vs-final-config.diff
+ef9534d418625629621d99ed7d5169e4da70a294c4a2d37f758ced5b1e9aaa0c  build-report.md
+
+# 官方镜像（真实解析对象）
+1900ce14cf6272a79278577a86d11c3bb0a808971e43bca08ace15b2967c1116  boot.img
+332da615ee309a7e611f9576f72d1eb8345518606d6d3dc00da546e81b46d0d6  init_boot.img
+
+# 说明
+# stock-boot-kernel.config（官方 boot 内嵌 IKCONFIG，205KB）未提交原文，
+# 其验收相关取值已收录于 stock-vs-final-config.diff / zram-lz4kd-audit.md /
+# bbr-audit.md / version-verification.txt。正式编译产物（Image / AK3 zip / APK /
+# final-config.txt）的 sha256 由 CI 工作流在正式构建后生成。

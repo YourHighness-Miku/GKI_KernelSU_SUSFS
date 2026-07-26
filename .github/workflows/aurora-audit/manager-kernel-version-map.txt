@@ -1,0 +1,16 @@
+manager_versionCode=40838
+manager_versionName=v4.1.3
+manager_commit=f1e24b66057d774888f80ea95fab4cfebb9612fe
+manager_branch=main
+manager_ci_label=ci_3653
+manager_main_commit_count=3653
+manager_uapi=2
+kernel_source_ref=builtin
+kernel_source_commit=b1d534bc41941b2c818d7a1a1dac341e4aabfc2d
+kernel_LOCAL_COUNT_locked=3653
+driver_versionCode_expected=40838
+driver_uapi=2
+compatibility_rule=exact equality manager.versionCode == driver.KSU_VERSION
+old_failed_driver_versionCode=37973
+old_failed_cause=LOCAL_COUNT from builtin rev-list --count HEAD (=788)
+formula=40000 + count - 2815

@@ -1,0 +1,23 @@
+{
+  "device": "Xiaomi 14 Ultra (aurora / 国行)",
+  "android_version": "android14",
+  "kernel_version": "6.1",
+  "sub_level": "138",
+  "os_patch_level": "2026-02",
+  "kernel_branch": "gki-android14-6.1",
+  "ack_manifest_branch": "common-android14-6.1",
+  "ack_tag": "android14-6.1.138_r00",
+  "ack_commit": "4894546596ee3a4b96d9f2157de0d197826cabc0",
+  "sukisu_pin_ref": "v4.1.3",
+  "sukisu_pin_commit": "0ca744a88835144c58d8256ebb32c279edabfcde",
+  "susfs_branch": "gki-android14-6.1",
+  "susfs_effective_commit": "090cf407fea14d960cba55ce6f69cc61a146d1b3",
+  "expected_susfs_version": "v2.2.0",
+  "use_kpm": true,
+  "use_zram": true,
+  "set_default_bbr": true,
+  "use_bbg": false,
+  "support_op8e": false,
+  "make_release": true,
+  "expected_ksu_version_code": "40000 + rev_list_count(0ca744a8) - 2815 (driver==manager, 锁定本地计数)"
+}

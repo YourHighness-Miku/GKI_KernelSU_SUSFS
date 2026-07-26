@@ -41,6 +41,7 @@ DEFAULT_BUILD_MATRIX = {
         {"sub_level": "90", "os_patch_level": "2024-08"},
         {"sub_level": "99", "os_patch_level": "2024-10"},
         {"sub_level": "124", "os_patch_level": "2025-02"},
+        {"sub_level": "138", "os_patch_level": "2026-02"},
         {"sub_level": "145", "os_patch_level": "2025-09"},
     ],
     "android15-6.6": [
@@ -69,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-release", action="store_true")
     parser.add_argument("--custom-version", dest="custom_version", default=None)
     parser.add_argument("--revision")
+    parser.add_argument("--sukisu-mode", choices=["stable", "ci"], default="ci")
+    parser.add_argument("--manager-commit", default=None)
+    parser.add_argument("--manager-version-code", type=int, default=None)
+    parser.add_argument("--manager-ci-run", default=None)
+    parser.add_argument("--kernel-builtin-commit", default=None)
     parser.add_argument("--matrix", "-m")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--list-configs", action="store_true")
@@ -98,6 +104,11 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         make_release=not args.no_release,
         custom_version=args.custom_version,
         revision=args.revision,
+        sukisu_mode=args.sukisu_mode,
+        manager_commit=args.manager_commit,
+        manager_version_code=args.manager_version_code,
+        manager_ci_run=args.manager_ci_run,
+        kernel_builtin_commit=args.kernel_builtin_commit,
     )
 
 
@@ -155,6 +166,7 @@ def build_matrix(matrix_key: str, args: argparse.Namespace, workspace: str) -> l
                 os_patch_level=cfg_data["os_patch_level"],
                 kernelsu_version=args.ksu_version,
                 kernelsu_commit=args.ksu_commit,
+                susfs_commit=args.susfs_commit,
                 use_zram=args.zram,
                 use_kpm=not args.no_kpm,
                 use_bbg=args.bbg,
