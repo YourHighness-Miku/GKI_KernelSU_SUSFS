@@ -1,0 +1,204 @@
+name: Aurora OneShot 6.1.138 driver-40895-noNetCls
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  push:
+    branches:
+      - ci/aurora-oneshot-40895-v2
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          verbose: 'true'
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y ccache python3 git curl wget zip unzip
+          pip install PyYAML
+
+      - name: Configure ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          ccache --version
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: Restore ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: android14-6.1-138-ccache-${{ github.sha }}
+          restore-keys: |
+            android14-6.1-138-ccache-
+
+      - name: Patch SukiSU baseline to 40895 (manager 93b56005 / ci_3710)
+        run: |
+          cd .github/workflows/scripts
+          sed -i 's/SUKISU_MANAGER_PIN_COMMIT = "35467545b2826e3acfc88699755981a889956b1a"/SUKISU_MANAGER_PIN_COMMIT = "93b560056ca72c350e597462b2f02063e9c62284"/' config.py
+          sed -i 's/SUKISU_MANAGER_CI_LABEL = "ci_3671"/SUKISU_MANAGER_CI_LABEL = "ci_3710"/' config.py
+          sed -i 's/SUKISU_MAIN_COMMIT_COUNT = 3671/SUKISU_MAIN_COMMIT_COUNT = 3710/' config.py
+          sed -i 's/assert EXPECTED_KSU_VERSION_CODE == 40856/assert EXPECTED_KSU_VERSION_CODE == 40895/' config.py
+          grep -nE "SUKISU_MAIN_COMMIT_COUNT|EXPECTED_KSU_VERSION_CODE ==|MANAGER_PIN_COMMIT|CI_LABEL" config.py
+
+      - name: Enable BPF_STREAM_PARSER only (no CGROUP_NET_CLASSID)
+        run: |
+          cd .github/workflows/scripts
+          sed -i 's|CONFIG_KSU_SUSFS_SUS_SU=n|CONFIG_KSU_SUSFS_SUS_SU=n\nCONFIG_BPF_STREAM_PARSER=y|' kernel_builder.py
+          grep -n "BPF_STREAM_PARSER" kernel_builder.py
+          ! grep -n "CGROUP_NET_CLASSID" kernel_builder.py
+
+      - name: Build kernel
+        run: |
+          cd ./.github/workflows/scripts
+
+          ARGS="--android android14"
+          ARGS="$ARGS --kernel 6.1"
+          ARGS="$ARGS --sub-level 138"
+          ARGS="$ARGS --os-patch 2026-02"
+          ARGS="$ARGS --ksu-version Stable(标准)"
+
+          ARGS="$ARGS --zram"
+          ARGS="$ARGS --bbr"
+          ARGS="$ARGS --custom-version=aurora"
+          ARGS="$ARGS --sukisu-mode=ci"
+          ARGS="$ARGS --manager-commit=93b560056ca72c350e597462b2f02063e9c62284"
+          ARGS="$ARGS --manager-version-code=40895"
+          ARGS="$ARGS --manager-ci-run=ci_3710"
+          ARGS="$ARGS --kernel-builtin-commit=b1d534bc41941b2c818d7a1a1dac341e4aabfc2d"
+
+          python3 build.py $ARGS
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find /tmp/gki-build -name "*.zip" -type f -exec cp -v {} artifacts/ \;
+          find /tmp/gki-build -name "Image" -type f -exec cp -v {} artifacts/ \; || true
+          find /tmp/gki-build -name "source-manifest.txt" -type f -exec cp -v {} artifacts/ \;
+          find /tmp/gki-build -name "*AnyKernel3.zip.filelist.txt" -type f -exec cp -v {} artifacts/ \; || true
+          find /tmp/gki-build -name "*AnyKernel3.zip.sha256" -type f -exec cp -v {} artifacts/ \; || true
+          if ls artifacts/*AnyKernel3.zip >/dev/null 2>&1; then
+            for z in artifacts/*AnyKernel3.zip; do
+              base=$(basename "$z")
+              if [[ "$base" != *"CI40895"* ]]; then
+                cp -v "$z" "artifacts/android14-6.1.138-aurora-SukiSU-CI40895-noNetCls-SUSFS2.2-KPM-LZ4KD-BBR-AnyKernel3.zip"
+              fi
+            done
+          fi
+          ls -lah artifacts || true
+
+      - name: Setup JDK for manager APK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Build SukiSU manager APK (main pin / 40895)
+        env:
+          SUKISU_MANAGER_COMMIT: 93b560056ca72c350e597462b2f02063e9c62284
+          SUKISU_MANAGER_VERSION_CODE: '40895'
+          ANDROID_HOME: ${{ github.workspace }}/.android-sdk
+          ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_HOME"
+          cd ./.github/workflows/scripts
+          # Manager binary is optional (user keeps official CI APK); metadata must exist.
+          python3 build_manager_apk.py "$GITHUB_WORKSPACE/artifacts" || true
+          if [ ! -f "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" ]; then
+            cat > "$GITHUB_WORKSPACE/artifacts/manager-commit.txt" <<EOF
+          sukisu_mode=ci
+          sukisu_manager_ref=main
+          sukisu_manager_commit=93b560056ca72c350e597462b2f02063e9c62284
+          sukisu_manager_ci=ci_3710
+          sukisu_kernel_builtin_ref=builtin
+          sukisu_kernel_builtin_commit=b1d534bc41941b2c818d7a1a1dac341e4aabfc2d
+          commit_count=3710
+          expected_version_code=40895
+          manager_version_code_baseline=40895
+          apk_build_status=metadata_only
+          note=official_user_apk_is_baseline_local_build_optional
+          official_user_apk_required=true
+          apks=[]
+          EOF
+          fi
+          # normalize indentation just in case
+          sed -i 's/^[[:space:]]*//' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+          cat "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+          grep -E '^expected_version_code=40895$' "$GITHUB_WORKSPACE/artifacts/manager-commit.txt"
+
+      - name: Hard gate manager/driver/API versionCode
+        env:
+          WANT_VC: '40895'
+          MANAGER_COMMIT_TXT: ${{ github.workspace }}/artifacts/manager-commit.txt
+        run: |
+          set -euo pipefail
+          MANIFEST=$(find /tmp/gki-build -name source-manifest.txt | head -1)
+          echo "source-manifest: $MANIFEST"
+          test -f "$MANIFEST"
+          cat "$MANIFEST"
+          test -f "$MANAGER_COMMIT_TXT"
+          cat "$MANAGER_COMMIT_TXT"
+          cd ./.github/workflows/scripts
+          python3 verify_manager_driver_gate.py
+          ls -lah "$GITHUB_WORKSPACE/artifacts"/*AnyKernel3.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernel-android14-6.1-138
+          path: artifacts/*
+
+      - name: Generate checksums
+        run: |
+          echo "=== Creating checksums ==="
+          sha256sum artifacts/* > SHA256SUMS.txt
+          cp SHA256SUMS.txt artifacts/ || true
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        if: ${{ success() }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: aurora-android14-6.1.138-CI40895-${{ github.run_number }}
+          name: "GKI 6.1.138 SukiSU-CI40895 noNetCls KPM LZ4KD BBR (aurora) #${{ github.run_number }}"
+          body: |
+            自动构建的 aurora (Xiaomi 14 Ultra 国行) GKI 内核包。
+            - 内核: android14-6.1.138（ACK tag 固定 + SUBLEVEL 门禁）
+            - SukiSU mode: ci / driver versionCode 40895（与管理器 40895 对齐）
+            - Manager baseline: versionCode 40895 / ci_3710 @ 93b560056ca72c350e597462b2f02063e9c62284
+            - Kernel source: builtin@b1d534bc41941b2c818d7a1a1dac341e4aabfc2d（含 KSU_SUSFS）
+            - SUSFS: v2.2.0（读实际源码校验）
+            - BPF: 仅保留 STREAM_PARSER；已移除 CGROUP_NET_CLASSID（疑似不开机根因，net_cls 与 Android cgroup 冲突）
+            - AK3 仅替换 boot 分区内核 Image；init_boot 不改动。
+            详见附件 source-manifest.txt / SHA256SUMS.txt。
+          files: |
+            artifacts/*
+          fail_on_unmatched_files: false
