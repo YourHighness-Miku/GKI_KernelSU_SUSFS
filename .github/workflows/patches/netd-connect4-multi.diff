@@ -1,0 +1,30 @@
+diff --git a/kernel/bpf/cgroup.c b/kernel/bpf/cgroup.c
+index 2cb04e0..10f43bd 100644
+--- a/kernel/bpf/cgroup.c
++++ b/kernel/bpf/cgroup.c
+@@ -653,6 +653,25 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
+ 
+ 	progs = &cgrp->bpf.progs[atype];
+ 
++	if (atype == CGROUP_INET4_CONNECT && flags == 0 &&
++	    cgrp->root == &cgrp_dfl_root && !cgroup_parent(cgrp) &&
++	    hlist_empty(progs)) {
++		/*
++		 * Android bpfloader attaches netd's connect4 program at the
++		 * default cgroup v2 root with flags=0.  That single-attach
++		 * mode later rejects any second program at the root (saved
++		 * flags mismatch) and blocks every attach in descendant
++		 * cgroups (hierarchy_allows_attach), so no other program can
++		 * safely coexist with netd's.  Normalize only this very
++		 * first flags=0 attach into BPF_F_ALLOW_MULTI: the original
++		 * program keeps slot 0 of the program list, and since
++		 * bpf_prog_run_array_cg() ANDs all return values, its deny
++		 * decision stays sticky for programs appended after it.
++		 */
++		flags = BPF_F_ALLOW_MULTI;
++		saved_flags = BPF_F_ALLOW_MULTI;
++	}
++
+ 	if (!hierarchy_allows_attach(cgrp, atype))
+ 		return -EPERM;
+ 

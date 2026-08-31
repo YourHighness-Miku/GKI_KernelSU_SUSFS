@@ -160,6 +160,40 @@ class BuilderMix6:
         logger.info("source-manifest.txt:\n" + out.read_text())
         return [str(out)]
 
+    def apply_netd_connect4_multi_patch(self):
+        """CI 一次性注入：netd connect4 ALLOW_MULTI 共存补丁（已审计批准）。
+
+        仅当仓库内补丁文件存在时生效；应用后做 numstat(19/0) + sha256 双门禁。
+        """
+        repo_root = Path(__file__).resolve().parents[3]
+        patch = repo_root / ".github" / "workflows" / "patches" / "netd-connect4-multi.diff"
+        if not patch.exists():
+            logger.info("netd connect4 补丁文件不存在，跳过: %s", patch)
+            return
+        expected_sha256 = "a6aa547404aa1854cf51ac5c65656ab3a1f428bcf27386eccf2338b485f12b8c"
+        common_dir = self.work_dir / "common"
+        self._chdir(common_dir)
+        self._run_cmd(f"git apply --check {patch}", check=True)
+        self._run_cmd(f"git apply {patch}", check=True)
+        numstat = subprocess.run("git diff --numstat kernel/bpf/cgroup.c", shell=True,
+                                 capture_output=True, text=True).stdout.split()
+        if len(numstat) < 2 or numstat[0] != "19" or numstat[1] != "0":
+            raise RuntimeError(f"netd 补丁行数门禁失败: {numstat}")
+        sha = subprocess.run("sha256sum kernel/bpf/cgroup.c", shell=True,
+                             capture_output=True, text=True).stdout.split()[0]
+        if sha != expected_sha256:
+            raise RuntimeError(f"netd 补丁 sha256 门禁失败: {sha} != {expected_sha256}")
+        proof = self.work_dir / "netd-patch-proof.txt"
+        proof.write_text(
+            "== git diff --stat kernel/bpf/cgroup.c ==\n"
+            + subprocess.run("git diff --stat kernel/bpf/cgroup.c", shell=True,
+                             capture_output=True, text=True).stdout
+            + "== git diff kernel/bpf/cgroup.c ==\n"
+            + subprocess.run("git diff kernel/bpf/cgroup.c", shell=True,
+                             capture_output=True, text=True).stdout
+            + "== sha256 ==\n" + sha + "\n")
+        logger.info("netd connect4 补丁已应用并通过双门禁: %s", sha)
+
     def build(self) -> BuildResult:
         import time
         start_time = time.time()
@@ -179,6 +213,7 @@ class BuilderMix6:
             self.apply_sukisu_patches()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
+            self.apply_netd_connect4_multi_patch()
             self.configure_kernel()
             self.configure_kernel_name()
             self.show_kernel_config()
