@@ -1,5 +1,5 @@
 name: Nezha Binder regression isolation
-run-name: Nezha DS typed-state and Rust type comparison — diagnostic only
+run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
@@ -7,6 +7,7 @@ on:
       - .github/workflows/nezha-baseline.yml
       - .github/scripts/nezha_baseline.py
       - .github/scripts/nezha_ds_candidate.py
+      - .github/scripts/nezha_sysv*
 permissions:
   contents: read
   actions: read
@@ -31,7 +32,7 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
           sudo apt-get update -qq
-          sudo apt-get install -y erofs-utils build-essential git curl python3 zip unzip bison flex libssl-dev libelf-dev bc rsync dwarves
+          sudo apt-get install -y erofs-utils build-essential git curl python3 zip unzip bison flex libssl-dev libelf-dev bc rsync dwarves qemu-system-arm gcc-aarch64-linux-gnu
           df -h .
       - name: Read only the matching public OTA module partition
         timeout-minutes: 25
@@ -64,18 +65,14 @@ jobs:
           git -C common status --porcelain | tee ../reports/common-status.txt
           test ! -s ../reports/common-status.txt
           df -h .
-      - name: Capture clean Rust type evidence and verify against the known good artifact
-        working-directory: kernel
+      - name: Recover previously verified clean Rust type records
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 ../.github/scripts/nezha_ds_candidate.py instrument common
-          tools/bazel build --config=fast --jobs=3 //common:kernel_aarch64
-          out=bazel-bin/common/kernel_aarch64
-          mkdir -p ../reports/clean
-          cp "$out"/rust/{kernel,bindings}.symtypes "$out"/rust/bindings/bindings_generated.rs ../reports/clean/
-          awk '$3=="vmlinux" {print $2,$1}' "$out/Module.symvers" | LC_ALL=C sort > ../reports/clean/exports
-          awk '$3=="vmlinux" {print $2,$1}' ../baseline-reference/Module.symvers | LC_ALL=C sort | cmp - ../reports/clean/exports
-          git -C common restore -- BUILD.bazel rust/Makefile
-          tools/bazel clean --expunge
+          gh run download 45243348628 --repo "$GITHUB_REPOSITORY" --name nezha-r74-droidspaces-45243348628 --dir type-reference
+          test -s type-reference/clean/kernel.symtypes
+          cp -a type-reference/clean reports/clean
+          awk '$3=="vmlinux" {print $2,$1}' baseline-reference/Module.symvers | LC_ALL=C sort | cmp - reports/clean/exports
       - name: Initialize diagnostic config fragment
         uses: ./.github/actions/initialize-config-fragment
       - name: Add only the original DroidSpaces group
@@ -88,7 +85,7 @@ jobs:
           os_patch_level: '2026-03'
           sublevel: '69'
           droidspaces_commit: cdadb9eb5d0f86aacffff60776333e6f6b73a30a
-      - name: Retain real aligned SysV union storage with stable Rust implementation identities
+      - name: Move SysV state out of task_struct without changing original C or Rust ABI
         run: |
           python3 -m py_compile .github/scripts/nezha_ds_candidate.py
           cp kernel/common/include/linux/sched.h reports/pre-candidate-sched.h
@@ -101,6 +98,7 @@ jobs:
           git -C kernel/common diff --binary > reports/source-changes.patch
           git -C kernel/common status --porcelain > reports/modified-source-status.txt
       - name: Compile isolated 4K group without any CRC edits
+        id: compile
         timeout-minutes: 90
         working-directory: kernel
         run: tools/bazel build --config=fast --jobs=3 --defconfig_fragment=//common:wild_defconfig.fragment //common:kernel_aarch64
@@ -121,6 +119,13 @@ jobs:
       - name: Reject lost config, moved task fields or baseline export CRC drift
         if: ${{ !cancelled() && hashFiles('reports/Module.symvers', 'reports/built.config') != '' }}
         run: python3 .github/scripts/nezha_ds_candidate.py compare baseline-reference reports
+      - name: Run actual ARM64 state and IPC lifecycle tests under QEMU
+        shell: bash
+        if: ${{ !cancelled() && steps.compile.conclusion == 'success' }}
+        timeout-minutes: 35
+        run: |
+          cd kernel/common
+          python3 tools/testing/kunit/kunit.py run --arch arm64 --cross_compile aarch64-linux-gnu- --kunitconfig "$GITHUB_WORKSPACE/.github/scripts/nezha_sysv.kunitconfig" --build_dir "$RUNNER_TEMP/nezha-kunit" --jobs 3 --timeout 180 'nezha-sysv-state*' 2>&1 | tee "$GITHUB_WORKSPACE/reports/kunit.log"
       - name: Preserve diagnostic reports, never publish a flashable package
         if: always()
         uses: actions/upload-artifact@v4

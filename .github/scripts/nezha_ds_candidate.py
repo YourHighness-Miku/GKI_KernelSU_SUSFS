@@ -6,37 +6,118 @@ import struct
 from pathlib import Path
 
 
-def apply(root):
-    path = root / "include/linux/sched.h"
+def replace_once(path, old, new):
     source = path.read_text()
-    definitions = []
-    for index, (typ, field, short) in enumerate((('sysv_sem', 'sysvsem', 'sem'), ('sysv_shm', 'sysvshm', 'shm'))):
-        tag = f"nezha_sysv_{short}_state"
-        block = (rf'(?m)^(\s*?)union\s*\{{\s*char __kabi_ignored_{index};\s*'
-                 rf'struct {typ}\s+{field};\s*\}}\s*__attribute__\(\(packed\)\);')
-        source, count = re.subn(block, rf'\g<1>union {tag} {field};', source)
-        if count != 1:
-            raise ValueError(f'Unexpected pinned DS layout for {field}: {count} matches')
-        definitions.append(f"union {tag} {{ char __kabi_ignored_{index}; struct {typ} state; }};")
-    anchor = "struct task_struct {"
-    if source.count(anchor) != 1:
-        raise ValueError("Ambiguous task definition")
-    source = source.replace(anchor, "#ifdef CONFIG_SYSVIPC\n" + "\n".join(definitions) + "\n#endif\n\n" + anchor)
+    if source.count(old) != 1:
+        raise ValueError(f'Expected one source anchor in {path}: {old[:80]!r}')
+    path.write_text(source.replace(old, new, 1))
+
+
+def apply(root):
+    path = root / 'include/linux/sched.h'
+    source = path.read_text()
+    for index, (typ, field) in enumerate((('sysv_sem', 'sysvsem'), ('sysv_shm', 'sysvshm'))):
+        pattern = (rf'(?m)^\s*union\s*\{{\s*char __kabi_ignored_{index};\s*'
+                   rf'struct {typ}\s+{field};\s*\}}\s*__attribute__\(\(packed\)\);')
+        source, n = re.subn(pattern, '', source)
+        if n != 1:
+            raise ValueError(f'Unexpected original DS field: {field}')
     path.write_text(source)
-    for rel in ('ipc/sem.c', 'ipc/shm.c', 'include/linux/shm.h', 'kernel/kcmp.c'):
-        path = root / rel
-        text = path.read_text()
-        text, n = re.subn(r'(->sysvsem|->sysvshm)(\s*\.)', r'\1.state\2', text)
-        if n == 0:
-            raise ValueError(f'No SysV references updated in {rel}')
-        path.write_text(text)
-    path = root / 'rust/Makefile'
-    text = path.read_text()
-    anchor = '--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests'
-    if text.count(anchor) != 1:
-        raise ValueError('Ambiguous pinned bindgen invocation')
-    text = text.replace(anchor, anchor + " --no-default '(nezha_sysv_(sem|shm)_state|sysv_(sem|shm))'")
-    path.write_text(text)
+    source_dir = Path(__file__).parent
+    for filename, destination in (
+            ('nezha_sysv_task.h', 'include/linux/nezha_sysv_task.h'),
+            ('nezha_sysv_state.c', 'ipc/nezha_sysv_state.c'),
+            ('nezha_sysv_state_test.c', 'ipc/nezha_sysv_state_test.c')):
+        target = root / destination
+        if target.exists():
+            raise ValueError(f'Refuse to overwrite {target}')
+        target.write_text((source_dir/filename).read_text())
+    for rel, anchor in (
+            ('ipc/sem.c', '#include <linux/ipc_namespace.h>'),
+            ('ipc/shm.c', '#include <linux/ipc_namespace.h>'),
+            ('kernel/fork.c', '#include <linux/sched/task.h>'),
+            ('kernel/kcmp.c', '#include <linux/ptrace.h>')):
+        replace_once(root/rel, anchor, anchor+'\n#include <linux/nezha_sysv_task.h>')
+    path = root / 'ipc/sem.c'
+    replace_once(path,
+        'static inline int get_undo_list(struct sem_undo_list **undo_listp)\n{\n'
+        '\tstruct sem_undo_list *undo_list;\n\n'
+        '\tundo_list = current->sysvsem.undo_list;',
+        'static inline int get_undo_list(struct sem_undo_list **undo_listp)\n{\n'
+        '\tstruct nezha_sysv_state *state;\n'
+        '\tstruct sem_undo_list *undo_list;\n\n'
+        '\tstate = nezha_sysv_get(current, true);\n'
+        '\tif (!state)\n\t\treturn -ENOMEM;\n'
+        '\tundo_list = READ_ONCE(state->undo_list);')
+    replace_once(path, '\t\tcurrent->sysvsem.undo_list = undo_list;',
+                 '\t\tWRITE_ONCE(state->undo_list, undo_list);')
+    replace_once(path,
+        '\tstruct sem_undo_list *undo_list;\n\tint error;\n\n'
+        '\tif (clone_flags & CLONE_SYSVSEM) {\n'
+        '\t\terror = get_undo_list(&undo_list);',
+        '\tstruct sem_undo_list *undo_list;\n'
+        '\tstruct nezha_sysv_state *state;\n\tint error;\n\n'
+        '\tif (clone_flags & CLONE_SYSVSEM) {\n'
+        '\t\tstate = nezha_sysv_get(tsk, true);\n'
+        '\t\tif (!state)\n\t\t\treturn -ENOMEM;\n'
+        '\t\terror = get_undo_list(&undo_list);')
+    replace_once(path,
+        '\t\ttsk->sysvsem.undo_list = undo_list;\n'
+        '\t} else\n\t\ttsk->sysvsem.undo_list = NULL;',
+        '\t\tWRITE_ONCE(state->undo_list, undo_list);\n\t}')
+    replace_once(path,
+        'void exit_sem(struct task_struct *tsk)\n{\n'
+        '\tstruct sem_undo_list *ulp;\n\n'
+        '\tulp = tsk->sysvsem.undo_list;\n\tif (!ulp)\n\t\treturn;\n'
+        '\ttsk->sysvsem.undo_list = NULL;',
+        'void exit_sem(struct task_struct *tsk)\n{\n'
+        '\tstruct nezha_sysv_state *state;\n\tstruct sem_undo_list *ulp;\n\n'
+        '\tstate = nezha_sysv_get(tsk, false);\n'
+        '\tif (!state)\n\t\treturn;\n'
+        '\tulp = READ_ONCE(state->undo_list);\n\tif (!ulp)\n\t\treturn;\n'
+        '\tWRITE_ONCE(state->undo_list, NULL);')
+    path = root / 'ipc/shm.c'
+    replace_once(path,
+        '\t\tstruct ipc_namespace *ns;\n\n\t\ttask_lock(task);\n\n'
+        '\t\tif (list_empty(&task->sysvshm.shm_clist)) {',
+        '\t\tstruct ipc_namespace *ns;\n'
+        '\t\tstruct nezha_sysv_state *state;\n\n\t\ttask_lock(task);\n\n'
+        '\t\tstate = nezha_sysv_get(task, false);\n'
+        '\t\tif (!state || list_empty(&state->shm_clist)) {')
+    replace_once(path, '&task->sysvshm.shm_clist, struct shmid_kernel,',
+                 '&state->shm_clist, struct shmid_kernel,')
+    replace_once(path,
+        '\tstruct shmid_kernel *shp;\n\tsize_t numpages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;',
+        '\tstruct shmid_kernel *shp;\n\tstruct nezha_sysv_state *state;\n'
+        '\tsize_t numpages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;')
+    replace_once(path,
+        '\tshp = kmalloc(sizeof(*shp), GFP_KERNEL_ACCOUNT);',
+        '\tstate = nezha_sysv_get(current, true);\n'
+        '\tif (!state)\n\t\treturn -ENOMEM;\n\n'
+        '\tshp = kmalloc(sizeof(*shp), GFP_KERNEL_ACCOUNT);')
+    replace_once(path, '&current->sysvshm.shm_clist);', '&state->shm_clist);')
+    replace_once(root/'include/linux/shm.h',
+        '#define shm_init_task(task) INIT_LIST_HEAD(&(task)->sysvshm.shm_clist)',
+        '#define shm_init_task(task) do { } while (0)')
+    replace_once(root/'kernel/kcmp.c',
+        '\t\tret = kcmp_ptr(task1->sysvsem.undo_list,\n'
+        '\t\t\t\t task2->sysvsem.undo_list,',
+        '\t\tret = kcmp_ptr(nezha_sysv_undo(task1),\n'
+        '\t\t\t\t nezha_sysv_undo(task2),')
+    replace_once(root/'kernel/fork.c',
+        '\tcpufreq_task_times_exit(tsk);',
+        '\tcpufreq_task_times_exit(tsk);\n\tnezha_sysv_free(tsk);')
+    with (root/'ipc/shm.c').open('a') as output:
+        output.write('\n#if IS_ENABLED(CONFIG_NEZHA_SYSV_STATE_KUNIT_TEST)\n'
+                     'long nezha_sysv_test_remove_shm(int shmid)\n{\n'
+                     '\treturn ksys_shmctl(shmid, IPC_RMID, NULL, IPC_64);\n}\n#endif\n')
+    with (root/'ipc/Makefile').open('a') as output:
+        output.write('\nobj-$(CONFIG_SYSVIPC) += nezha_sysv_state.o\n'
+                     'obj-$(CONFIG_NEZHA_SYSV_STATE_KUNIT_TEST) += nezha_sysv_state_test.o\n')
+    with (root/'init/Kconfig').open('a') as output:
+        output.write('\nconfig NEZHA_SYSV_STATE_KUNIT_TEST\n'
+                     '\tbool "Nezha external SysV state lifecycle tests"\n'
+                     '\tdepends on KUNIT=y && SYSVIPC\n\tdefault n\n')
 
 
 def instrument(root):
@@ -98,12 +179,16 @@ def compare(reference, candidate):
     required = set(re.findall(r'^(CONFIG_\w+=y)$', (candidate/'requested.fragment').read_text(), re.M))
     required.update({'CONFIG_SYSVIPC=y','CONFIG_IPC_NS=y','CONFIG_POSIX_MQUEUE=y','CONFIG_USER_NS=y'})
     absent = sorted(required-config)
-    bindings = (candidate/'bindings_generated.rs').read_text()
-    for tag in ('nezha_sysv_sem_state', 'nezha_sysv_shm_state'):
-        if not re.search(r'pub union ' + tag + r'\s*\{', bindings):
-            raise ValueError(f'Real Rust union layout missing for {tag}')
-        if re.search(r'impl\s+(?:[a-zA-Z_:]*::)?Default\s+for\s+' + tag + r'\b', bindings):
-            raise ValueError(f'Unexpected new Default implementation for {tag}')
+    after = (candidate/'bindings_generated.rs').read_text()
+    for filename in ('kernel.symtypes', 'bindings.symtypes'):
+        def records(directory):
+            return dict(line.split(' ', 1) for line in (directory/filename).read_text().splitlines())
+        old, new = records(candidate/'clean'), records(candidate)
+        different = [name for name in old.keys() & new.keys() if old[name] != new[name]]
+        if different:
+            raise ValueError(f'Original Rust type records changed: {different[:10]}')
+    if 'nezha_sysv_state' in after:
+        raise ValueError('Private SysV state leaked into Rust ABI bindings')
     report = dict(baseline_exports=len(a), changed_or_missing=changes, task_bytes=[sa,sb],
                   changed_named_task_members=moved, missing_requested_config=absent)
     (candidate/'ds-abi-result.json').write_text(json.dumps(report, indent=2)+'\n')
