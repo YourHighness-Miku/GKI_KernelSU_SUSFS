@@ -1,0 +1,76 @@
+name: Nezha r74 original Binder baseline
+run-name: Nezha r74 baseline — no installable ZIP
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/workflows/nezha-baseline.yml
+      - .github/scripts/nezha_baseline.py
+permissions:
+  contents: read
+concurrency:
+  group: nezha-r74-baseline
+  cancel-in-progress: false
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Runner disk and packages
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -qq
+          sudo apt-get install -y erofs-utils build-essential git curl python3 zip unzip bison flex libssl-dev libelf-dev bc rsync dwarves
+          df -h .
+      - name: Read only the matching public OTA module partition
+        timeout-minutes: 25
+        run: |
+          mkdir -p reports
+          python3 .github/scripts/nezha_baseline.py fetch --output system_dlkm.img
+          fsck.erofs --extract=original-modules system_dlkm.img
+          test -f original-modules/flatten/lib/modules/rust_binder.ko
+          grep -n rust_binder original-modules/flatten/lib/modules/modules.load | tee reports/original-load-order.txt
+      - name: Sync official source without custom patches
+        timeout-minutes: 55
+        run: |
+          curl -fL --retry 3 https://storage.googleapis.com/git-repo-downloads/repo -o "$RUNNER_TEMP/repo"
+          chmod +x "$RUNNER_TEMP/repo"
+          mkdir kernel
+          cd kernel
+          "$RUNNER_TEMP/repo" init --depth=1 --no-clone-bundle -u https://android.googlesource.com/kernel/manifest -b common-android16-6.12-2026-03
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/nezha-baseline.xml <<'EOF'
+          <manifest>
+            <remove-project name="kernel/common" />
+            <project path="common" name="kernel/common" remote="aosp" revision="b1d12d482d767c50cb792d988e4479d3f75c342a" />
+          </manifest>
+          EOF
+          "$RUNNER_TEMP/repo" sync -c --no-tags --no-clone-bundle --fail-fast -j4
+          test "$(git -C common rev-parse HEAD)" = b1d12d482d767c50cb792d988e4479d3f75c342a
+          "$RUNNER_TEMP/repo" manifest -r > ../reports/resolved-manifest.xml
+          git -C common status --porcelain | tee ../reports/common-status.txt
+          test ! -s ../reports/common-status.txt
+          df -h .
+      - name: Compile clean 4K GKI, without feature fragments or CRC edits
+        timeout-minutes: 90
+        working-directory: kernel
+        run: tools/bazel build --config=fast --jobs=3 //common:kernel_aarch64
+      - name: Original Binder static regression gate
+        run: |
+          cp kernel/bazel-bin/common/kernel_aarch64/Image reports/Image
+          cp kernel/bazel-bin/common/kernel_aarch64/Module.symvers reports/Module.symvers
+          cp kernel/bazel-bin/common/kernel_aarch64_config/out_dir/.config reports/built.config
+          grep -qx 'CONFIG_ARM64_4K_PAGES=y' reports/built.config
+          python3 .github/scripts/nezha_baseline.py verify --module original-modules/flatten/lib/modules/rust_binder.ko --symvers reports/Module.symvers --output reports/binder-result.json
+          sha256sum reports/Image reports/Module.symvers reports/built.config | tee reports/SHA256SUMS
+      - name: Preserve diagnostic reports, never publish a flashable package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-r74-baseline-${{ github.run_id }}
+          path: reports/
+          retention-days: 7
+          if-no-files-found: warn
