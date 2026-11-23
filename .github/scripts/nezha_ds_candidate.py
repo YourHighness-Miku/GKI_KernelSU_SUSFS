@@ -23,6 +23,8 @@ def apply(root):
         if n != 1:
             raise ValueError(f'Unexpected original DS field: {field}')
     path.write_text(source)
+    flags = '--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests'
+    replace_once(root/'rust/Makefile', flags, flags + " --no-default 'sysv_(sem|shm)'")
     source_dir = Path(__file__).parent
     for filename, destination in (
             ('nezha_sysv_task.h', 'include/linux/nezha_sysv_task.h'),

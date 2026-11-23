@@ -152,6 +152,7 @@ static struct kunit_case state_cases[] = {
 	KUNIT_CASE(state_race_test),
 	KUNIT_CASE(semundo_share_test),
 	KUNIT_CASE(shm_lifecycle_test),
+	KUNIT_CASE(semundo_alloc_failure_test),
 	{}
 };
 
