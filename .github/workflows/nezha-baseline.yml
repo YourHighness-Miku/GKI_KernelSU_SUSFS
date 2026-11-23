@@ -1,11 +1,12 @@
 name: Nezha Binder regression isolation
-run-name: Nezha DS and Networking isolation — no installable ZIP
+run-name: Nezha DS aligned-members candidate — diagnostic only
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
     paths:
       - .github/workflows/nezha-baseline.yml
       - .github/scripts/nezha_baseline.py
+      - .github/scripts/nezha_ds_candidate.py
 permissions:
   contents: read
   actions: read
@@ -19,7 +20,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        feature: [droidspaces, networking]
+        feature: [droidspaces]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -75,15 +76,12 @@ jobs:
           os_patch_level: '2026-03'
           sublevel: '69'
           droidspaces_commit: cdadb9eb5d0f86aacffff60776333e6f6b73a30a
-      - name: Add only the original Networking group
-        if: matrix.feature == 'networking'
-        uses: ./.github/actions/networking
-        with:
-          version: android16-6.12
-          android_version: android16
-          kernel_version: '6.12'
-          os_patch_level: '2026-03'
-          sublevel: '69'
+      - name: Keep both SysV members but let the compiler align their storage
+        run: |
+          python3 -m py_compile .github/scripts/nezha_ds_candidate.py
+          cp kernel/common/include/linux/sched.h reports/pre-candidate-sched.h
+          python3 .github/scripts/nezha_ds_candidate.py apply kernel/common/include/linux/sched.h
+          cp kernel/common/include/linux/sched.h reports/candidate-sched.h
       - name: Record exact diagnostic changes
         run: |
           cp kernel/common/wild_defconfig.fragment reports/requested.fragment
@@ -101,6 +99,9 @@ jobs:
           grep -qx 'CONFIG_ARM64_4K_PAGES=y' reports/built.config
           python3 .github/scripts/nezha_baseline.py verify --module original-modules/flatten/lib/modules/rust_binder.ko --symvers reports/Module.symvers --output reports/binder-result.json
           sha256sum reports/Image reports/Module.symvers reports/built.config | tee reports/SHA256SUMS
+      - name: Reject lost config, moved task fields or baseline export CRC drift
+        if: ${{ !cancelled() && hashFiles('reports/Module.symvers', 'reports/built.config') != '' }}
+        run: python3 .github/scripts/nezha_ds_candidate.py compare baseline-reference reports
       - name: Preserve diagnostic reports, never publish a flashable package
         if: always()
         uses: actions/upload-artifact@v4
