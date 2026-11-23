@@ -1,5 +1,5 @@
 name: Nezha Binder regression isolation
-run-name: Nezha DS named-union candidate — diagnostic only
+run-name: Nezha DS typed-state and Rust type comparison — diagnostic only
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
@@ -64,6 +64,18 @@ jobs:
           git -C common status --porcelain | tee ../reports/common-status.txt
           test ! -s ../reports/common-status.txt
           df -h .
+      - name: Capture clean Rust type evidence and verify against the known good artifact
+        working-directory: kernel
+        run: |
+          python3 ../.github/scripts/nezha_ds_candidate.py instrument common
+          tools/bazel build --config=fast --jobs=3 //common:kernel_aarch64
+          out=bazel-bin/common/kernel_aarch64
+          mkdir -p ../reports/clean
+          cp "$out"/rust/{kernel,bindings}.symtypes "$out"/rust/bindings/bindings_generated.rs ../reports/clean/
+          awk '$3=="vmlinux" {print $2,$1}' "$out/Module.symvers" | LC_ALL=C sort > ../reports/clean/exports
+          awk '$3=="vmlinux" {print $2,$1}' ../baseline-reference/Module.symvers | LC_ALL=C sort | cmp - ../reports/clean/exports
+          git -C common restore -- BUILD.bazel rust/Makefile
+          tools/bazel clean --expunge
       - name: Initialize diagnostic config fragment
         uses: ./.github/actions/initialize-config-fragment
       - name: Add only the original DroidSpaces group
@@ -81,6 +93,7 @@ jobs:
           python3 -m py_compile .github/scripts/nezha_ds_candidate.py
           cp kernel/common/include/linux/sched.h reports/pre-candidate-sched.h
           python3 .github/scripts/nezha_ds_candidate.py apply kernel/common
+          python3 .github/scripts/nezha_ds_candidate.py instrument kernel/common
           cp kernel/common/include/linux/sched.h reports/candidate-sched.h
       - name: Record exact diagnostic changes
         run: |
@@ -99,6 +112,8 @@ jobs:
             if [ -s "$bindings" ]; then cp "$bindings" reports/bindings_generated.rs; break; fi
           done
           test -s reports/bindings_generated.rs
+          cp kernel/bazel-bin/common/kernel_aarch64/rust/{kernel,bindings}.symtypes reports/
+          python3 .github/scripts/nezha_type_delta.py
           cp kernel/bazel-bin/common/kernel_aarch64_config/out_dir/.config reports/built.config
           grep -qx 'CONFIG_ARM64_4K_PAGES=y' reports/built.config
           python3 .github/scripts/nezha_baseline.py verify --module original-modules/flatten/lib/modules/rust_binder.ko --symvers reports/Module.symvers --output reports/binder-result.json

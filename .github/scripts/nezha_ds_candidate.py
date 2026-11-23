@@ -35,14 +35,20 @@ def apply(root):
     anchor = '--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests'
     if text.count(anchor) != 1:
         raise ValueError('Ambiguous pinned bindgen invocation')
-    text = text.replace(anchor, anchor + " --no-default 'nezha_sysv_(sem|shm)_state'")
+    text = text.replace(anchor, anchor + " --no-default '(nezha_sysv_(sem|shm)_state|sysv_(sem|shm))'")
     path.write_text(text)
+
+
+def instrument(root):
+    path = root / 'rust/Makefile'
+    with path.open('a') as out:
+        out.write('\n$(obj)/bindings.o $(obj)/kernel.o: private KBUILD_SYMTYPES := 1\n')
     path = root / 'BUILD.bazel'
     text = path.read_text()
     anchor = 'name = "kernel_aarch64",\n    outs = DEFAULT_GKI_OUTS,'
     if text.count(anchor) != 1:
         raise ValueError('Ambiguous kernel outputs')
-    text = text.replace(anchor, anchor[:-1] + ' + ["rust/bindings/bindings_generated.rs"],')
+    text = text.replace(anchor, anchor[:-1] + ' + ["rust/bindings/bindings_generated.rs", "rust/kernel.symtypes", "rust/bindings.symtypes"],')
     path.write_text(text)
 
 
@@ -110,11 +116,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     modes = parser.add_subparsers(dest='mode', required=True)
     modes.add_parser('apply').add_argument('root', type=Path)
+    modes.add_parser('instrument').add_argument('root', type=Path)
     check = modes.add_parser('compare')
     check.add_argument('reference', type=Path)
     check.add_argument('candidate', type=Path)
     args = parser.parse_args()
     if args.mode == 'apply':
         apply(args.root)
+    elif args.mode == 'instrument':
+        instrument(args.root)
     else:
         compare(args.reference, args.candidate)
