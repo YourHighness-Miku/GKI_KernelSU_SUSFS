@@ -442,6 +442,13 @@ jobs:
           version: ${{ inputs.version }}
           allow_version_mismatch: true
 
+      - name: Adapt pinned Nova builtin to target LSM API
+        if: inputs.root_flavor == 'sukisu-ultra'
+        shell: bash
+        run: |
+          python3 .github/scripts/sukisu_builtin_compat.py \
+            kernel/common kernel/SukiSU-Ultra build-reports/nova-compat.json
+
       - name: Build Normal Kernel
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}

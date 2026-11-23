@@ -53,6 +53,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         INPUT_ROOT_FLAVOR: ${{ inputs.root_flavor }}
+        INPUT_ROOT_MATRIX: ${{ inputs.root_matrix }}
         INPUT_ALL_FLAVORS: ${{ inputs.all_flavors }}
         INPUT_ALLOW_FALLBACK: ${{ inputs.allow_fallback }}
         INPUT_NEXT_COMMIT: ${{ inputs.next_commit }}
@@ -199,9 +200,9 @@ runs:
               resolve_stock "${mc:-${INPUT_BAKASU_COMMIT:-}}" bakasu_commit https://github.com/Baka-SU/BakaSU.git main
               ;;
             sukisu-ultra)
-              owner="SukiSU-Ultra"; repo="SukiSU-Ultra"; wf="build-manager.yml"
-              branch="main"; want="Manager,Spoofed-Manager"
-              resolve_stock "${mc:-${INPUT_SUKISU_ULTRA_COMMIT:-}}" sukisu_ultra_commit https://github.com/SukiSU-Ultra/SukiSU-Ultra.git main
+              owner="SukiSU-Nova"; repo="SukiSU-Nova"; wf="manager.yml"
+              branch="main"; want="Manager"
+              resolve_stock "${mc:-${INPUT_SUKISU_ULTRA_COMMIT:-}}" sukisu_ultra_commit https://github.com/SukiSU-Nova/SukiSU-Nova.git builtin
               ;;
             finasu)
               owner="LyraVoid"; repo="FinaSU"; wf="build-manager.yml"
@@ -228,8 +229,8 @@ runs:
             # never has a run to match. Substituting a different commit here is
             # exactly what made the manager report a different version than the
             # kernel, so say so and let the source build own it.
-            if [[ "$flavor" == "next-susfs" ]]; then
-              echo "WARNING: no ${owner}/${repo} manager build for ${stock}; requires build_from_source at that exact commit" >&2
+            if [[ "$flavor" == "next-susfs" || "$flavor" == "sukisu-ultra" ]]; then
+              echo "WARNING: no ${owner}/${repo} manager build for ${stock}; no unrelated manager will be packaged" >&2
               printf -v REC '{"flavor":"%s","owner":"%s","repo":"%s","source":"run","run_id":null,"stock":"%s","want":"%s","note":"no-ci-run"}' \
                 "$flavor" "$owner" "$repo" "$stock" "$want"
               return 0
