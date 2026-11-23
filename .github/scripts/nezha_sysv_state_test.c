@@ -115,6 +115,39 @@ static void shm_lifecycle_test(struct kunit *test)
 	nezha_sysv_free(current);
 }
 
+static int idle_child(void *unused)
+{
+        return 0;
+}
+
+static void semundo_alloc_failure_test(struct kunit *test)
+{
+        struct task_struct *child;
+        int err, phase;
+
+        KUNIT_ASSERT_PTR_EQ(test, nezha_sysv_get(current, false), NULL);
+        child = kthread_create(idle_child, NULL, "sysv-fault");
+        KUNIT_ASSERT_FALSE(test, IS_ERR(child));
+        for (phase = 0; phase < 3; phase++) {
+                /* Fail child state, then parent state, then the undo-list allocation. */
+                WRITE_ONCE(current->fail_nth, 1);
+                err = copy_semundo(CLONE_SYSVSEM, child);
+                WRITE_ONCE(current->fail_nth, 0);
+                KUNIT_EXPECT_EQ(test, err, -ENOMEM);
+                KUNIT_EXPECT_PTR_EQ(test, nezha_sysv_undo(child), NULL);
+                KUNIT_EXPECT_PTR_EQ(test, nezha_sysv_undo(current), NULL);
+                if (err != -ENOMEM || phase == 2)
+                        break;
+                if (!nezha_sysv_get(phase ? current : child, true)) {
+                        KUNIT_FAIL(test, "preallocation failed");
+                        break;
+                }
+        }
+        exit_sem(child);
+        kthread_stop(child);
+        exit_sem(current);
+}
+
 static struct kunit_case state_cases[] = {
 	KUNIT_CASE(state_race_test),
 	KUNIT_CASE(semundo_share_test),

@@ -99,11 +99,9 @@ def apply(root):
     replace_once(root/'include/linux/shm.h',
         '#define shm_init_task(task) INIT_LIST_HEAD(&(task)->sysvshm.shm_clist)',
         '#define shm_init_task(task) do { } while (0)')
-    replace_once(root/'kernel/kcmp.c',
-        '\t\tret = kcmp_ptr(task1->sysvsem.undo_list,\n'
-        '\t\t\t\t task2->sysvsem.undo_list,',
-        '\t\tret = kcmp_ptr(nezha_sysv_undo(task1),\n'
-        '\t\t\t\t nezha_sysv_undo(task2),')
+    for task in ('task1', 'task2'):
+        replace_once(root/'kernel/kcmp.c', f'{task}->sysvsem.undo_list',
+                     f'nezha_sysv_undo({task})')
     replace_once(root/'kernel/fork.c',
         '\tcpufreq_task_times_exit(tsk);',
         '\tcpufreq_task_times_exit(tsk);\n\tnezha_sysv_free(tsk);')
@@ -111,13 +109,16 @@ def apply(root):
         output.write('\n#if IS_ENABLED(CONFIG_NEZHA_SYSV_STATE_KUNIT_TEST)\n'
                      'long nezha_sysv_test_remove_shm(int shmid)\n{\n'
                      '\treturn ksys_shmctl(shmid, IPC_RMID, NULL, IPC_64);\n}\n#endif\n')
+    # Permit task-scoped failslab on sleepable allocations only in the test kernel.
+    replace_once(root/'mm/failslab.c', '.ignore_gfp_reclaim = true,',
+                 '.ignore_gfp_reclaim = !IS_ENABLED(CONFIG_NEZHA_SYSV_STATE_KUNIT_TEST),')
     with (root/'ipc/Makefile').open('a') as output:
         output.write('\nobj-$(CONFIG_SYSVIPC) += nezha_sysv_state.o\n'
                      'obj-$(CONFIG_NEZHA_SYSV_STATE_KUNIT_TEST) += nezha_sysv_state_test.o\n')
     with (root/'init/Kconfig').open('a') as output:
         output.write('\nconfig NEZHA_SYSV_STATE_KUNIT_TEST\n'
                      '\tbool "Nezha external SysV state lifecycle tests"\n'
-                     '\tdepends on KUNIT=y && SYSVIPC\n\tdefault n\n')
+                     '\tdepends on KUNIT=y && SYSVIPC && FAILSLAB\n\tdefault n\n')
 
 
 def instrument(root):
