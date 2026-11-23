@@ -1,5 +1,5 @@
 name: Nezha Binder regression isolation
-run-name: Nezha DS aligned-members candidate — diagnostic only
+run-name: Nezha DS named-union candidate — diagnostic only
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
@@ -76,11 +76,11 @@ jobs:
           os_patch_level: '2026-03'
           sublevel: '69'
           droidspaces_commit: cdadb9eb5d0f86aacffff60776333e6f6b73a30a
-      - name: Keep both SysV members but let the compiler align their storage
+      - name: Retain real aligned SysV union storage with stable Rust implementation identities
         run: |
           python3 -m py_compile .github/scripts/nezha_ds_candidate.py
           cp kernel/common/include/linux/sched.h reports/pre-candidate-sched.h
-          python3 .github/scripts/nezha_ds_candidate.py apply kernel/common/include/linux/sched.h
+          python3 .github/scripts/nezha_ds_candidate.py apply kernel/common
           cp kernel/common/include/linux/sched.h reports/candidate-sched.h
       - name: Record exact diagnostic changes
         run: |
@@ -95,6 +95,10 @@ jobs:
         run: |
           cp kernel/bazel-bin/common/kernel_aarch64/Image reports/Image
           cp kernel/bazel-bin/common/kernel_aarch64/Module.symvers reports/Module.symvers
+          for bindings in kernel/bazel-bin/common/kernel_aarch64/rust/bindings/bindings_generated.rs kernel/bazel-bin/common/kernel_aarch64/bindings_generated.rs; do
+            if [ -s "$bindings" ]; then cp "$bindings" reports/bindings_generated.rs; break; fi
+          done
+          test -s reports/bindings_generated.rs
           cp kernel/bazel-bin/common/kernel_aarch64_config/out_dir/.config reports/built.config
           grep -qx 'CONFIG_ARM64_4K_PAGES=y' reports/built.config
           python3 .github/scripts/nezha_baseline.py verify --module original-modules/flatten/lib/modules/rust_binder.ko --symvers reports/Module.symvers --output reports/binder-result.json

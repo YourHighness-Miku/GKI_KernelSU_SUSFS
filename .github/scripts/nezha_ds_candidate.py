@@ -6,15 +6,44 @@ import struct
 from pathlib import Path
 
 
-def apply(path):
+def apply(root):
+    path = root / "include/linux/sched.h"
     source = path.read_text()
-    for index, (typ, field) in enumerate((('sysv_sem', 'sysvsem'), ('sysv_shm', 'sysvshm'))):
+    definitions = []
+    for index, (typ, field, short) in enumerate((('sysv_sem', 'sysvsem', 'sem'), ('sysv_shm', 'sysvshm', 'shm'))):
+        tag = f"nezha_sysv_{short}_state"
         block = (rf'(?m)^(\s*?)union\s*\{{\s*char __kabi_ignored_{index};\s*'
                  rf'struct {typ}\s+{field};\s*\}}\s*__attribute__\(\(packed\)\);')
-        source, count = re.subn(block, rf'\g<1>struct {typ} {field};', source)
+        source, count = re.subn(block, rf'\g<1>union {tag} {field};', source)
         if count != 1:
             raise ValueError(f'Unexpected pinned DS layout for {field}: {count} matches')
+        definitions.append(f"union {tag} {{ char __kabi_ignored_{index}; struct {typ} state; }};")
+    anchor = "struct task_struct {"
+    if source.count(anchor) != 1:
+        raise ValueError("Ambiguous task definition")
+    source = source.replace(anchor, "#ifdef CONFIG_SYSVIPC\n" + "\n".join(definitions) + "\n#endif\n\n" + anchor)
     path.write_text(source)
+    for rel in ('ipc/sem.c', 'ipc/shm.c', 'include/linux/shm.h', 'kernel/kcmp.c'):
+        path = root / rel
+        text = path.read_text()
+        text, n = re.subn(r'(->sysvsem|->sysvshm)(\s*\.)', r'\1.state\2', text)
+        if n == 0:
+            raise ValueError(f'No SysV references updated in {rel}')
+        path.write_text(text)
+    path = root / 'rust/Makefile'
+    text = path.read_text()
+    anchor = '--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests'
+    if text.count(anchor) != 1:
+        raise ValueError('Ambiguous pinned bindgen invocation')
+    text = text.replace(anchor, anchor + " --no-default 'nezha_sysv_(sem|shm)_state'")
+    path.write_text(text)
+    path = root / 'BUILD.bazel'
+    text = path.read_text()
+    anchor = 'name = "kernel_aarch64",\n    outs = DEFAULT_GKI_OUTS,'
+    if text.count(anchor) != 1:
+        raise ValueError('Ambiguous kernel outputs')
+    text = text.replace(anchor, anchor[:-1] + ' + ["rust/bindings/bindings_generated.rs"],')
+    path.write_text(text)
 
 
 def task_layout(path):
@@ -63,6 +92,12 @@ def compare(reference, candidate):
     required = set(re.findall(r'^(CONFIG_\w+=y)$', (candidate/'requested.fragment').read_text(), re.M))
     required.update({'CONFIG_SYSVIPC=y','CONFIG_IPC_NS=y','CONFIG_POSIX_MQUEUE=y','CONFIG_USER_NS=y'})
     absent = sorted(required-config)
+    bindings = (candidate/'bindings_generated.rs').read_text()
+    for tag in ('nezha_sysv_sem_state', 'nezha_sysv_shm_state'):
+        if not re.search(r'pub union ' + tag + r'\s*\{', bindings):
+            raise ValueError(f'Real Rust union layout missing for {tag}')
+        if re.search(r'impl\s+(?:[a-zA-Z_:]*::)?Default\s+for\s+' + tag + r'\b', bindings):
+            raise ValueError(f'Unexpected new Default implementation for {tag}')
     report = dict(baseline_exports=len(a), changed_or_missing=changes, task_bytes=[sa,sb],
                   changed_named_task_members=moved, missing_requested_config=absent)
     (candidate/'ds-abi-result.json').write_text(json.dumps(report, indent=2)+'\n')
@@ -74,12 +109,12 @@ def compare(reference, candidate):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     modes = parser.add_subparsers(dest='mode', required=True)
-    modes.add_parser('apply').add_argument('header', type=Path)
+    modes.add_parser('apply').add_argument('root', type=Path)
     check = modes.add_parser('compare')
     check.add_argument('reference', type=Path)
     check.add_argument('candidate', type=Path)
     args = parser.parse_args()
     if args.mode == 'apply':
-        apply(args.header)
+        apply(args.root)
     else:
         compare(args.reference, args.candidate)
