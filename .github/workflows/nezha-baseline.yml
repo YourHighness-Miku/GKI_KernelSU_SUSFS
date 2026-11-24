@@ -1,5 +1,5 @@
 name: Nezha Binder regression isolation
-run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only
+run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only (recovery push)
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
