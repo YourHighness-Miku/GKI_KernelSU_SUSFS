@@ -1,5 +1,5 @@
 name: Nezha Binder regression isolation
-run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only (recovery push)
+run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only (fresh clean reference)
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
@@ -65,14 +65,18 @@ jobs:
           git -C common status --porcelain | tee ../reports/common-status.txt
           test ! -s ../reports/common-status.txt
           df -h .
-      - name: Recover previously verified clean Rust type records
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Capture clean Rust type evidence and verify against the known good artifact
+        working-directory: kernel
         run: |
-          gh run download 45243348628 --repo "$GITHUB_REPOSITORY" --name nezha-r74-droidspaces-45243348628 --dir type-reference
-          test -s type-reference/clean/kernel.symtypes
-          cp -a type-reference/clean reports/clean
-          awk '$3=="vmlinux" {print $2,$1}' baseline-reference/Module.symvers | LC_ALL=C sort | cmp - reports/clean/exports
+          python3 ../.github/scripts/nezha_ds_candidate.py instrument common
+          tools/bazel build --config=fast --jobs=3 //common:kernel_aarch64
+          out=bazel-bin/common/kernel_aarch64
+          mkdir -p ../reports/clean
+          cp "$out"/rust/{kernel,bindings}.symtypes "$out"/rust/bindings/bindings_generated.rs ../reports/clean/
+          awk '$3=="vmlinux" {print $2,$1}' "$out/Module.symvers" | LC_ALL=C sort > ../reports/clean/exports
+          awk '$3=="vmlinux" {print $2,$1}' ../baseline-reference/Module.symvers | LC_ALL=C sort | cmp - ../reports/clean/exports
+          git -C common restore -- BUILD.bazel rust/Makefile
+          tools/bazel clean --expunge
       - name: Initialize diagnostic config fragment
         uses: ./.github/actions/initialize-config-fragment
       - name: Add only the original DroidSpaces group
