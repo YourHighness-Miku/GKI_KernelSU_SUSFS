@@ -186,6 +186,14 @@ jobs:
         timeout-minutes: 35
         run: |
           cd kernel/common
+          mkdir -p "$RUNNER_TEMP/nezha-kunit/security/selinux"
+          gcc -O2 -Wall -Iinclude/uapi -Iinclude -Isecurity/selinux/include \
+            scripts/selinux/genheaders/genheaders.c -o "$RUNNER_TEMP/nezha-selinux-genheaders"
+          "$RUNNER_TEMP/nezha-selinux-genheaders" \
+            "$RUNNER_TEMP/nezha-kunit/security/selinux/flask.h" \
+            "$RUNNER_TEMP/nezha-kunit/security/selinux/av_permissions.h"
+          test -s "$RUNNER_TEMP/nezha-kunit/security/selinux/flask.h"
+          test -s "$RUNNER_TEMP/nezha-kunit/security/selinux/av_permissions.h"
           python3 tools/testing/kunit/kunit.py run --arch arm64 --cross_compile aarch64-linux-gnu- --kunitconfig "$GITHUB_WORKSPACE/.github/scripts/nezha_sysv.kunitconfig" --build_dir "$RUNNER_TEMP/nezha-kunit" --jobs 3 --timeout 180 'nezha-sysv-state*' 2>&1 | tee "$GITHUB_WORKSPACE/reports/kunit.log"
       - name: Require all four actual ARM64 SysV tests to pass without skips
         if: ${{ !cancelled() && steps.compile.conclusion == 'success' }}
