@@ -1,13 +1,13 @@
-name: Nezha Binder regression isolation
-run-name: Nezha out-of-line SysV state and real ARM64 IPC tests — diagnostic only (fresh clean reference)
+name: Nezha combined feature compatibility
+run-name: Nezha Nova SUSFS DroidSpaces Networking and BBG — combined compatibility, not flashable
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
     paths:
       - .github/workflows/nezha-baseline.yml
-      - .github/scripts/nezha_baseline.py
-      - .github/scripts/nezha_ds_candidate.py
-      - .github/scripts/nezha_sysv*
+      - .github/scripts/**
+      - .github/actions/**
+      - .github/patches/**
 permissions:
   contents: read
   actions: read
@@ -16,18 +16,20 @@ concurrency:
   cancel-in-progress: false
 jobs:
   baseline:
-    name: isolate-${{ matrix.feature }}
+    name: verify-${{ matrix.feature }}
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        feature: [droidspaces]
+        feature: [combined]
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Test the fail-closed compatibility gates and offline BBG integration
+        run: python3 -m unittest discover -s .github/scripts -p test_nezha_full_gate.py -v
       - name: Runner disk and packages
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
@@ -65,22 +67,50 @@ jobs:
           git -C common status --porcelain | tee ../reports/common-status.txt
           test ! -s ../reports/common-status.txt
           df -h .
-      - name: Capture clean Rust type evidence and verify against the known good artifact
-        working-directory: kernel
+      - name: Recover independently rechecked clean Rust reference
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 ../.github/scripts/nezha_ds_candidate.py instrument common
-          tools/bazel build --config=fast --jobs=3 //common:kernel_aarch64
-          out=bazel-bin/common/kernel_aarch64
-          mkdir -p ../reports/clean
-          cp "$out"/rust/{kernel,bindings}.symtypes "$out"/rust/bindings/bindings_generated.rs ../reports/clean/
-          awk '$3=="vmlinux" {print $2,$1}' "$out/Module.symvers" | LC_ALL=C sort > ../reports/clean/exports
-          awk '$3=="vmlinux" {print $2,$1}' ../baseline-reference/Module.symvers | LC_ALL=C sort | cmp - ../reports/clean/exports
-          git -C common restore -- BUILD.bazel rust/Makefile
-          tools/bazel clean --expunge
+          gh run download 45457054054 --repo "$GITHUB_REPOSITORY" --name nezha-r74-droidspaces-45457054054 --dir type-reference
+          test -s type-reference/clean/kernel.symtypes
+          test -s type-reference/clean/bindings.symtypes
+          cp -a type-reference/clean reports/clean
+          awk '$3=="vmlinux" {print $2,$1}' baseline-reference/Module.symvers | LC_ALL=C sort | cmp - reports/clean/exports
       - name: Initialize diagnostic config fragment
         uses: ./.github/actions/initialize-config-fragment
-      - name: Add only the original DroidSpaces group
-        if: matrix.feature == 'droidspaces'
+      - name: Integrate the original pinned Nova builtin
+        uses: ./.github/actions/root-setup
+        with:
+          flavor: sukisu-ultra
+          commit: 4bec532dd447e2852aa8932afa768255350c103a
+      - name: Keep the original single manager configuration
+        uses: ./.github/actions/single-manager-for-sukisu-ultra-trim-cert-table
+        with:
+          root_flavor: sukisu-ultra
+      - name: Integrate pinned SUSFS with its unchanged configuration
+        uses: ./.github/actions/susfs
+        with:
+          enabled: 'true'
+          susfs_commit: 9b0b13f069673b9b07b713a5c66977de4d62b175
+          version: android16-6.12
+          android_version: android16
+          kernel_version: '6.12'
+          os_patch_level: '2026-03'
+          sublevel: '69'
+          root_flavor: sukisu-ultra
+      - name: Integrate BBG at an explicitly recorded candidate revision
+        uses: ./.github/actions/bbg
+        with:
+          commit: 48d9fdea643bcb41d204541400e9d8656b97a54f
+      - name: Integrate the original Networking configuration
+        uses: ./.github/actions/networking
+        with:
+          version: android16-6.12
+          android_version: android16
+          kernel_version: '6.12'
+          os_patch_level: '2026-03'
+          sublevel: '69'
+      - name: Integrate the original pinned DroidSpaces configuration
         uses: ./.github/actions/droidspaces
         with:
           version: android16-6.12
@@ -89,6 +119,27 @@ jobs:
           os_patch_level: '2026-03'
           sublevel: '69'
           droidspaces_commit: cdadb9eb5d0f86aacffff60776333e6f6b73a30a
+      - name: Pin the external Unicode patch source
+        run: |
+          git init kernel_patches
+          git -C kernel_patches remote add origin https://github.com/WildKernels/kernel_patches.git
+          git -C kernel_patches fetch --depth=1 origin 70c394f16d82b0f85a4f07617630d82dde6d203c
+          git -C kernel_patches checkout --detach 70c394f16d82b0f85a4f07617630d82dde6d203c
+          test "$(git -C kernel_patches rev-parse HEAD)" = 70c394f16d82b0f85a4f07617630d82dde6d203c
+      - name: Keep the original Unicode compatibility patch
+        uses: ./.github/actions/unicode-fix
+        with:
+          kernel_version: '6.12'
+      - name: Keep the original miscellaneous configuration
+        uses: ./.github/actions/misc
+        with:
+          version: android16-6.12
+          android_version: android16
+          kernel_version: '6.12'
+          sublevel: '69'
+          variant: Normal
+      - name: Restore the previously built Nova LSM and version adaptation
+        run: python3 .github/scripts/sukisu_builtin_compat.py kernel/common kernel/SukiSU-Ultra reports/nova-compat.json
       - name: Move SysV state out of task_struct without changing original C or Rust ABI
         run: |
           python3 -m py_compile .github/scripts/nezha_ds_candidate.py
@@ -99,9 +150,13 @@ jobs:
       - name: Record exact diagnostic changes
         run: |
           cp kernel/common/wild_defconfig.fragment reports/requested.fragment
+          printf 'kernel=%s\nroot=%s\nsusfs=%s\nbbg=%s\ndroidspaces=%s\npatches=%s\n' \
+            "$(git -C kernel/common rev-parse HEAD)" "$ROOT_COMMIT" "$SUSFS_COMMIT" "$BBG_COMMIT" \
+            "$(git -C Droidspaces-OSS rev-parse HEAD)" "$(git -C kernel_patches rev-parse HEAD)" > reports/component-revisions.txt
+          printf '%s\n' 'BBG and external Unicode patch revisions are new fixed candidates; historical dependency locks were not recovered.' > reports/bbg-provenance.txt
           git -C kernel/common diff --binary > reports/source-changes.patch
           git -C kernel/common status --porcelain > reports/modified-source-status.txt
-      - name: Compile isolated 4K group without any CRC edits
+      - name: Compile combined 4K features without any CRC edits
         id: compile
         timeout-minutes: 90
         working-directory: kernel
@@ -118,6 +173,8 @@ jobs:
           python3 .github/scripts/nezha_type_delta.py
           cp kernel/bazel-bin/common/kernel_aarch64_config/out_dir/.config reports/built.config
           grep -qx 'CONFIG_ARM64_4K_PAGES=y' reports/built.config
+          python3 .github/scripts/nezha_full_gate.py config reports/built.config reports/combined-config-result.json
+          python3 .github/scripts/verify_fragment.py reports/requested.fragment --config reports/built.config
           python3 .github/scripts/nezha_baseline.py verify --module original-modules/flatten/lib/modules/rust_binder.ko --symvers reports/Module.symvers --output reports/binder-result.json
           sha256sum reports/Image reports/Module.symvers reports/built.config | tee reports/SHA256SUMS
       - name: Reject lost config, moved task fields or baseline export CRC drift
@@ -130,11 +187,24 @@ jobs:
         run: |
           cd kernel/common
           python3 tools/testing/kunit/kunit.py run --arch arm64 --cross_compile aarch64-linux-gnu- --kunitconfig "$GITHUB_WORKSPACE/.github/scripts/nezha_sysv.kunitconfig" --build_dir "$RUNNER_TEMP/nezha-kunit" --jobs 3 --timeout 180 'nezha-sysv-state*' 2>&1 | tee "$GITHUB_WORKSPACE/reports/kunit.log"
+      - name: Require all four actual ARM64 SysV tests to pass without skips
+        if: ${{ !cancelled() && steps.compile.conclusion == 'success' }}
+        run: python3 .github/scripts/nezha_full_gate.py kunit reports/kunit.log reports/combined-kunit-result.json
       - name: Preserve diagnostic reports, never publish a flashable package
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nezha-r74-${{ matrix.feature }}-${{ github.run_id }}
-          path: reports/
+          path: |
+            reports/
+            !reports/Image
           retention-days: 7
           if-no-files-found: warn
+      - name: Retain a candidate image only after every compatibility gate passed
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-r74-combined-kernel-${{ github.run_id }}
+          path: reports/Image
+          retention-days: 7
+          if-no-files-found: error

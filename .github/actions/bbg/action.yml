@@ -1,10 +1,36 @@
 name: Setup Baseband Guard (BBG)
-description: Download and configure Baseband Guard security module
+description: Integrate Baseband Guard at an immutable revision without its network installer
+inputs:
+  commit:
+    description: Full BBG commit SHA; required for reproducible builds
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
+    - name: Install pinned Baseband Guard
+      if: inputs.commit != ''
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      env:
+        EXPECTED_BBG_COMMIT: ${{ inputs.commit }}
+      run: |
+        set -euo pipefail
+        [[ "$EXPECTED_BBG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 2
+        test ! -e Baseband-guard
+        test ! -L Baseband-guard
+        git init Baseband-guard
+        git -C Baseband-guard remote add origin https://github.com/vc-teahouse/Baseband-guard.git
+        git -C Baseband-guard fetch origin "$EXPECTED_BBG_COMMIT"
+        git -C Baseband-guard checkout --detach "$EXPECTED_BBG_COMMIT"
+        test "$(git -C Baseband-guard rev-parse HEAD)" = "$EXPECTED_BBG_COMMIT"
+        test ! -f Baseband-guard/.git/shallow
+        python3 "$GITHUB_WORKSPACE/.github/scripts/bbg_integrate_pinned.py" "$PWD"
+        echo "BBG_COMMIT=$EXPECTED_BBG_COMMIT" >> "$GITHUB_ENV"
+    
     - name: Install Baseband Guard
+      if: inputs.commit == ''
       uses: ./.github/actions/retry
       with:
         command: |
@@ -25,7 +51,7 @@ runs:
       run: |
         set -euo pipefail
         BBG_DIR="common/security/baseband-guard"
-        [ -d "$BBG_DIR" ] || { echo "ERROR: $BBG_DIR not found after setup.sh" >&2; exit 1; }
+        [ -d "$BBG_DIR" ] || { echo "ERROR: pinned BBG integration missing" >&2; exit 1; }
         python3 "${GITHUB_WORKSPACE}/.github/scripts/bbg_618_compat.py" "$BBG_DIR"
 
     - name: Configure Baseband Guard
@@ -52,8 +78,8 @@ runs:
       working-directory: ${{ github.workspace }}/kernel/Baseband-guard
       run: |
         # Extract and export BBG version info
-        BBG_COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
-        echo "BBG_COMMIT=$BBG_COMMIT" >> $GITHUB_ENV
+        BBG_COMMIT=$(git rev-parse HEAD)
+        echo "BBG_COMMIT=$BBG_COMMIT" >> "$GITHUB_ENV"
 
     - name: Enable Kernel Configs
       shell: bash
