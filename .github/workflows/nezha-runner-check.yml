@@ -1,0 +1,12 @@
+name: Nezha runner check
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths: [.github/workflows/nezha-runner-check.yml]
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: date -u
