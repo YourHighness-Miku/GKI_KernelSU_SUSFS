@@ -1,12 +1,99 @@
-name: Nezha runner check
+name: Nezha evidence check
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
     paths: [.github/workflows/nezha-runner-check.yml]
-permissions: {}
+permissions:
+  actions: read
 jobs:
-  check:
+  evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
-      - run: date -u
+      - name: Prepare digest-checked artifact reader
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/read-artifact" <<'SH'
+          set -euo pipefail
+          run=$1 head=$2 artifact=$3 digest=$4
+          api="repos/$GITHUB_REPOSITORY/actions"
+          gh api "$api/runs/$run" | jq -e --arg sha "$head" --argjson id "$run" '.id == $id and .head_sha == $sha and .conclusion == "success"' >/dev/null
+          gh api "$api/artifacts/$artifact" | jq -e --arg sha "$head" --arg digest "sha256:$digest" --argjson id "$artifact" --argjson run "$run" '.id == $id and .workflow_run.id == $run and .workflow_run.head_sha == $sha and .digest == $digest and .expired == false and .size_in_bytes <= 33554432' >/dev/null
+          cd "$RUNNER_TEMP"
+          gh api "$api/artifacts/$artifact/zip" > "$artifact.part"
+          printf '%s  %s\n' "$digest" "$artifact.part" | sha256sum --check --status
+          mv "$artifact.part" "$artifact.zip"
+          SH
+      - name: Verify DroidSpaces run, commit and report archive digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/read-artifact" 45457054054 987a1c64bcd2e770da97b117a57bca313afa0886 14953572601 8da9fabf45746b469af171a969e2c9ef6bcbea7d2f21e7b7c0515002c649ca28
+      - name: Verify four distinct KUnit case records
+        shell: python
+        run: |
+          import collections, os, re, zipfile
+          cases = ('state_race_test', 'semundo_share_test', 'shm_lifecycle_test', 'semundo_alloc_failure_test')
+          with zipfile.ZipFile(os.path.join(os.environ['RUNNER_TEMP'], '14953572601.zip')) as z:
+              members = [m for m in z.infolist() if m.filename in ('kunit.log', 'reports/kunit.log')]
+              if len(members) != 1 or members[0].file_size > 4*1024*1024: raise SystemExit('Missing, ambiguous or oversized KUnit log')
+              text = z.read(members[0]).decode('utf-8')
+          text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+          counts = collections.Counter()
+          bad = False
+          for line in text.splitlines():
+              line = re.sub(r'^\s*\[(?:\d\d:\d\d:\d\d(?:\.\d+)?|\s*\d+\.\d+)\]\s*', '', line).strip()
+              if re.search(r'\[(?:FAIL(?:ED|URE)?|SKIP(?:PED)?|ERROR|CRASHED|TIMEOUT)\]|^not ok\b|^Bail out!|#\s*(?:SKIP|TODO)\b|\b(?:failed|skipped|errors?|crashed):\s*[1-9]', line, re.I): bad = True
+              m = re.fullmatch(r'(?:\[PASSED\]\s+|ok\s+\d+\s+(?:-\s+)?)([A-Za-z0-9_]+)', line)
+              if m: counts[m[1]] += 1
+          for case in cases:
+              print(case, 'PASS' if counts[case] == 1 and not bad else 'NOT VERIFIED')
+          if bad or counts != collections.Counter(cases): raise SystemExit('KUnit evidence did not meet the four-case gate')
+      - name: Verify original Binder required=240 matched=240 and empty mismatch sets
+        if: ${{ !cancelled() }}
+        shell: python
+        run: |
+          import json, os, zipfile
+          with zipfile.ZipFile(os.path.join(os.environ['RUNNER_TEMP'], '14953572601.zip')) as z:
+              members = [m for m in z.infolist() if m.filename in ('binder-result.json', 'reports/binder-result.json')]
+              if len(members) != 1 or members[0].file_size > 262144: raise SystemExit('Missing, ambiguous or oversized Binder report')
+              r = json.loads(z.read(members[0]))
+          if (r.get('required'), r.get('matched'), r.get('missing'), r.get('wrong_crc')) != (240, 240, [], {}): raise SystemExit('Binder report mismatch')
+          print('Binder required=240 matched=240 missing=0 wrong_crc=0')
+      - name: Verify original BuildInfo run and archive digest
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/read-artifact" 45091184346 db5a839d23cf8006885541eda8d3a0cd93f75f7d 14781859408 861e0b18d5cb28d24a5c9581827da221f0394e339fc825a27737fdaca5d32387
+      - name: Look for an explicit historical BBG revision
+        if: ${{ !cancelled() }}
+        id: bbg
+        shell: python
+        run: |
+          import os, re, zipfile
+          from pathlib import Path, PurePosixPath
+          path = Path(os.environ['RUNNER_TEMP']) / '14781859408.zip'
+          hits = set()
+          unresolved = False
+          label = r'(?:bbg|baseband[ _-]?guard)(?:[ _-]+(?:commit(?:[ _-]+sha)?|sha|revision|lock))?'
+          field = re.compile(r'^\s*[|"*` -]*' + label + r'["*` ]*\s*[:=|]\s*["` ]*([^"`|,\s]+)["` ,|]*\s*$', re.I)
+          if path.exists():
+              with zipfile.ZipFile(path) as z:
+                  for m in z.infolist():
+                      name = PurePosixPath(m.filename).name
+                      if not re.fullmatch(r'[A-Za-z0-9_.-]{1,160}\.(?:md|json|txt|env)', name): continue
+                      if m.file_size > 1048576: unresolved = True; continue
+                      for line in z.read(m).decode('utf-8', errors='replace').splitlines():
+                          match = field.fullmatch(line)
+                          if not match: continue
+                          v = match[1].lower()
+                          if re.fullmatch(r'[0-9a-f]{40}', v): hits.add((v, name))
+                          else: unresolved = True
+          verdict = 'unresolved'
+          if not unresolved and len({v for v, _ in hits}) == 1:
+              sha, name = min(hits)
+              verdict = sha + ' ' + name
+          print('Historical BBG:', verdict)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f: print('verdict=' + verdict, file=f)
+      - name: Historical BBG — ${{ steps.bbg.outputs.verdict || 'unresolved' }}
+        if: ${{ !cancelled() }}
+        run: ':'
