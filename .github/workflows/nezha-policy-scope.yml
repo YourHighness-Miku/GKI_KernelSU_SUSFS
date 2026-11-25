@@ -1,0 +1,67 @@
+name: Nezha conditional original module policy
+run-name: Nezha immutable stock-filter graph replay — conditional evidence only
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/nezha-policy-scope/**
+      - .github/nezha-audit/module_inventory.py
+      - .github/workflows/nezha-policy-scope.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nezha-conditional-policy-replay
+  cancel-in-progress: false
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      NEZHA_SCOPE_ROOT: audit-input
+      NEZHA_SCOPE_SYMVERS: candidate-input/Module.symvers
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Retrieve existing immutable evidence only, without rebuilding or refetching OTA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir reports
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/15006850750/zip" > audit.zip
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/14984610010/zip" > candidate-reports.zip
+          python3 - <<'PY'
+          import hashlib, io, zipfile
+          from pathlib import Path
+          inputs = [
+              ('audit.zip', '38312b5c60111cd685dfa8644e65ada981b7361799f63c465c4e20944ee6780a',
+               'audit-input', ['module-audit.json', 'module-load-metadata.json']),
+              ('candidate-reports.zip', 'd83a8378a694aba3981a0380b5e7c6b54ad6a12180bb709be9db99fd10fea802',
+               'candidate-input', ['Module.symvers']),
+          ]
+          for path, expected, destination, names in inputs:
+              data = Path(path).read_bytes()
+              if hashlib.sha256(data).hexdigest() != expected:
+                  raise SystemExit('Retained evidence ZIP identity differs')
+              root = Path(destination)
+              root.mkdir()
+              with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                  for name in names:
+                      rows = [i for i in archive.infolist() if i.filename == name]
+                      if len(rows) != 1 or not 0 < rows[0].file_size <= 16 * 1024**2:
+                          raise SystemExit('Missing or ambiguous retained member')
+                      (root / name).write_bytes(archive.read(rows[0]))
+          PY
+      - name: Recompute every original and selected CRC and test failure-closed boundaries
+        run: |
+          python3 -m unittest discover -s .github/nezha-policy-scope -p test_policy_scope.py -v
+          python3 .github/nezha-policy-scope/policy_scope.py --audit "$NEZHA_SCOPE_ROOT/module-audit.json" --metadata "$NEZHA_SCOPE_ROOT/module-load-metadata.json" --symvers "$NEZHA_SCOPE_SYMVERS" --report reports/conditional-policy.json
+      - name: Retain explicitly conditional reports, never a module, boot image or ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-conditional-policy-${{ github.run_id }}
+          path: reports/*.json
+          if-no-files-found: error
+          retention-days: 7
