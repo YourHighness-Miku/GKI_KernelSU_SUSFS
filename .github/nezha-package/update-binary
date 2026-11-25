@@ -199,7 +199,7 @@ main() {
   parse_invocation "$@" || return 1
   check_platform || { installer_error E_PLATFORM 'Root AArch64 installer context required.'; return 1; }
   load_boot_pin || { installer_error E_GOLDEN 'Accepted output identity missing.'; return 1; }
-  for util in cat chmod cmp env head mkdir mktemp od rm sha256sum sort stat tail unzip; do
+  for util in cat chmod cmp env head mkdir mktemp od printf rm sha256sum sort stat tail unzip; do
     command -v "$util" >/dev/null || { installer_error E_TOOL "Required system tool unavailable: $util"; return 1; }
   done
   zip_size "$ZIPFILE" || { installer_error E_ZIP 'Archive is missing, linked or outside its size bound.'; return 1; }

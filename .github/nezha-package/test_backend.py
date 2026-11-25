@@ -69,7 +69,7 @@ class TestBackend(unittest.TestCase):
         self.pack(self.entries)
         system = self.root / 'system-tools'
         system.mkdir()
-        for tool in ('cat', 'sort', 'cmp', 'stat', 'head', 'tail', 'od', 'mkdir', 'unzip', 'sha256sum', 'rm'):
+        for tool in ('cat', 'sort', 'cmp', 'stat', 'head', 'tail', 'od', 'mkdir', 'unzip', 'sha256sum', 'rm', 'printf'):
             (system / tool).symlink_to(shutil.which(tool))
         run = self.run_helper(f'PATH="{system}"; command -v awk >/dev/null && exit 9; verify_payload "$1"')
         self.assertEqual(run.returncode, 0, run.stderr)
