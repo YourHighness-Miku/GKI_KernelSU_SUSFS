@@ -6,6 +6,26 @@ from pathlib import Path
 import re
 
 
+def reserve_lsm_slot(common, header):
+    path = common / 'include/linux/lsm_count.h'
+    if not path.exists():
+        if 'lsm_static_call' in header:
+            raise ValueError('Static-call LSM header without lsm_count.h')
+        return None
+    text = path.read_text()
+    anchor = '#define __COUNT_LSMS(skipped_arg, args...) COUNT_ARGS(args...)'
+    if text.count(anchor) != 1 or re.search(r'\bBBG_ENABLED\b', text):
+        raise ValueError('Unknown or conflicting BBG LSM capacity accounting')
+    slot = ('#if IS_BUILTIN(CONFIG_BBG)\n#define BBG_ENABLED 1,\n'
+            '#else\n#define BBG_ENABLED\n#endif\n\n')
+    text = text.replace(anchor, slot + anchor, 1)
+    text, changed = re.subn(r'(^[ \t]+CAPABILITIES_ENABLED[^\n]*\\\n)([ \t]*)',
+                            r'\1\2BBG_ENABLED \\\n\2', text, flags=re.M)
+    if changed != 1:
+        raise ValueError('Cannot reserve the builtin BBG LSM static-call slot')
+    return path, text
+
+
 def integrate(kernel):
     kernel = kernel.resolve()
     common = kernel / 'common'
@@ -31,6 +51,9 @@ def integrate(kernel):
     at = ends[-1].start()
     after_config = (before_config[:at] + 'source "security/baseband-guard/Kconfig"\n'
                     + before_config[at:])
+    count = reserve_lsm_slot(common, header)
+    if count is not None:
+        count[0].write_text(count[1])
     makefile.write_text(before_make + '\nobj-$(CONFIG_BBG) += baseband-guard/\n')
     kconfig.write_text(after_config)
     target.symlink_to(os.path.relpath(checkout, security), target_is_directory=True)
