@@ -1,0 +1,60 @@
+name: Nezha conditional AK3 assembly
+run-name: Nezha already-unlocked conditional AK3 — exact prior Image, no kernel rebuild
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/nezha-conditional/**
+      - .github/nezha-package/**
+      - .github/workflows/nezha-conditional-package.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nezha-conditional-package
+  cancel-in-progress: false
+jobs:
+  conditional-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEZHA_PASSED_IMAGE: inputs/Image
+      NEZHA_AK3_ASSETS: inputs/assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Acquire exact completed run evidence and unchanged Image without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/nezha-conditional/fetch.py
+      - name: Install only a utility emulator, not a kernel toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+      - name: Validate independent conditional gate and actual pinned ARM64 utility capabilities
+        run: |
+          python3 -m unittest discover -s .github/nezha-package -p 'test_*.py' -v
+          python3 -m unittest discover -s .github/nezha-conditional -p 'test_*.py' -v
+      - name: Assemble and verify one restricted conditional AK3 without running its installer
+        run: |
+          python3 .github/nezha-conditional/build.py --image inputs/Image --assets inputs/assets --evidence inputs/evidence --runs inputs/runs.json --output package-out
+      - name: Publish only the verified candidate archive, not a release
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-conditional-ak3-${{ github.run_id }}
+          path: package-out/Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-conditional.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Preserve the finite conditional decision and producer identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-conditional-report-${{ github.run_id }}
+          path: |
+            package-out/conditional-package.json
+            inputs/runs.json
+          if-no-files-found: warn
+          retention-days: 14

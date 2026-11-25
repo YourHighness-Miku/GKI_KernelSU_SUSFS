@@ -1,0 +1,101 @@
+{
+  "status": "PAYLOAD_PREFLIGHT_ONLY",
+  "source_run": 45524716598,
+  "image_sha256": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c",
+  "image_file_bytes": 44603904,
+  "arm64": {
+    "text_offset": 0,
+    "runtime_image_bytes": 47775744,
+    "flags": 10
+  },
+  "ak3_commit": "e1e9dce98430c5c6f231f7094a8c7f4ecaf50948",
+  "template_sha256": "f746bd4a62bcfd85ead7801da73b33d237fa0f3c38e9f74675e65dac4d62aa46",
+  "fixed_assets": {
+    "LICENSE": {
+      "bytes": 11630,
+      "sha256": "df6f65da47d459fdf2a2ef0eadb34f37d838befc91352b64a84f35507bea95cd"
+    },
+    "META-INF/com/google/android/update-binary": {
+      "bytes": 19948,
+      "sha256": "18bfaca89bdf67115447895e28b65a6127a8ddab6ff2561b214e70cef35f76f9"
+    },
+    "META-INF/com/google/android/updater-script": {
+      "bytes": 115,
+      "sha256": "ef91e7d8a9b3dc2076be6412932d82657751d0f21471b1d09f2ca8855bcbb899"
+    },
+    "tools/ak3-core.sh": {
+      "bytes": 39792,
+      "sha256": "715d7bde56eed0c02d56956f2ffa3a41a181a6b2523b5e356f79f127f46d7b38"
+    },
+    "tools/busybox": {
+      "bytes": 1498688,
+      "sha256": "c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c"
+    },
+    "tools/magiskboot": {
+      "bytes": 1015160,
+      "sha256": "4c480c9ffc51b4b9d8c3760bb188fd1eb73972a90983963ef791bca6faa65d6c"
+    }
+  },
+  "prepared_assets": {
+    "LICENSE": {
+      "bytes": 11630,
+      "sha256": "df6f65da47d459fdf2a2ef0eadb34f37d838befc91352b64a84f35507bea95cd"
+    },
+    "META-INF/com/google/android/update-binary": {
+      "bytes": 7106,
+      "sha256": "3ab938732a1951d30f0212e9ac80e2fa78cea76d9ce440b6cbd37d970fae03f6"
+    },
+    "META-INF/com/google/android/updater-script": {
+      "bytes": 115,
+      "sha256": "ef91e7d8a9b3dc2076be6412932d82657751d0f21471b1d09f2ca8855bcbb899"
+    },
+    "tools/ak3-core.sh": {
+      "bytes": 39407,
+      "sha256": "3bdfca82f6834697c10c4b7be0ab186834fa5e0053d112f993f58153232dd902"
+    },
+    "tools/busybox": {
+      "bytes": 1498688,
+      "sha256": "c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c"
+    },
+    "tools/magiskboot": {
+      "bytes": 1015160,
+      "sha256": "4c480c9ffc51b4b9d8c3760bb188fd1eb73972a90983963ef791bca6faa65d6c"
+    }
+  },
+  "template_policy": {
+    "do.devicecheck": "1",
+    "device.name1": "nezha",
+    "do.check_boot_version": "1",
+    "do.modules": "0",
+    "do.systemless": "0",
+    "block": "boot",
+    "is_slot_device": "1",
+    "slot_select": "active",
+    "patch_vbmeta_flag": "0",
+    "PATCHVBMETAFLAG": "false",
+    "NO_VBMETA_PARTITION_PATCH": "1",
+    "expected_image": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c"
+  },
+  "debug_archive_export_disabled": true,
+  "generic_mount_backend_removed": true,
+  "bootstrap_rendered_for_install": false,
+  "golden_repacked_identity_required": true,
+  "core_writer_replaced_with_guarded_single_write": true,
+  "prospective_archive_allowlist": [
+    "Image",
+    "LICENSE",
+    "META-INF/com/google/android/update-binary",
+    "META-INF/com/google/android/updater-script",
+    "anykernel.sh",
+    "tools/ak3-core.sh",
+    "tools/busybox",
+    "tools/magiskboot"
+  ],
+  "installer_executed": false,
+  "flashable_archive_created": false,
+  "release_authorized": false,
+  "remaining": [
+    "Original signed boot-content descriptor mismatch",
+    "Actual runtime provider and device boot unproven"
+  ]
+}

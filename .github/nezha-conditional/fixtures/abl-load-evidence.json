@@ -1,0 +1,101 @@
+{
+  "finding": "On the normal requested-boot hash path, flags bit 0 set selects the partition byte capacity as data_size, not the signed image_size or footer original size. The candidate kernel fits that source buffer if the read succeeds at the retained partition geometry. This is not authentication, destination-memory fit, or boot success.",
+  "status": {
+    "old_descriptor_truncates_error_permitted_load": "contradicted on this path",
+    "descriptor_hash_verification": "FAIL (retained repack)",
+    "device_boot": "UNKNOWN",
+    "delivery": "BLOCKED, unchanged"
+  },
+  "identity": {
+    "abl.img": {
+      "bytes": 335872,
+      "sha256": "9f6a3bd6ec3c2785b2fab8101c779990cb85fc7c3de7bead2798f015b8c2da50"
+    },
+    "abl-decompressed.bin": {
+      "bytes": 1089736,
+      "sha256": "576dc6430ee021e7f7e2596bcc0e90faab378733921a7a59ea33a167b502880f"
+    },
+    "abl.efi": {
+      "bytes": 1089536,
+      "sha256": "56ec352c42637ec1ce81bca0673e2a5f93dfb0081a8b2fe212ff9c8c2bd0d5b0"
+    }
+  },
+  "method": "Static AArch64 Capstone 5.0.6, skipdata on; all cited control/data edges decoded. PE32+ machine 0xaa64, base 0, .text RVA/raw 0x1000 size 0xc7000. Addresses below are hex RVAs. No target execution.",
+  "inputs": {
+    "retained": "boot-assessment/{vbmeta-info.txt,boot-info.txt,repacked-boot-info.txt,stock-boot-verify.txt,repacked-boot-verify.txt,repack.txt,boot-result.json,candidate-identity.json}",
+    "candidate_Image_sha256": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c",
+    "vendor_header_first_16_hex": "564e4452424f4f540400000000100000",
+    "stock_kernel_bytes": 41511424,
+    "repacked_kernel_bytes": 44603904,
+    "boot_v4_ramdisk_and_signature_bytes_each": 0,
+    "boot_descriptor_bytes_both": 41533440,
+    "repack_footer_original_and_vbmeta_offset": 44609536,
+    "vbmeta_bytes": 2432,
+    "partition_bytes": 100663296,
+    "verification": "Stock: embedded SHA256_RSA4096 vbmeta and boot digest verify. Repack: embedded vbmeta still verifies; boot digest does not. Top-level vbmeta reports a chain descriptor for boot, not a verified complete chain."
+  },
+  "native_flow": [
+    [
+      "Request",
+      "22964-22970/22acc-22ad4: on the zero existing-image count branch append index 0 to sp+c0; 21654-21678 inserts first free pointer from table bb150, [bb150]=6e13e (boot). Nonzero existing count skips this insertion; not a universal statement about pre-supplied images. 22bf8-22c0c: x1=list, x2=suffix, w3=w24, x4=&slot."
+    ],
+    [
+      "Flags",
+      "222ec/2230c/22318: w25=(w27!=0). 22860-22870 selects w25 or w25|2; bit 0 unchanged. 286b8 saves w3 in w26; 28904 w25=w26&1. 28938-28964 passes ops/list/suffix, w3=flags,w4=bit0,x7=vbmeta. 297bc-297e0: ops=x21,bit0=w22,flags=w23,list=x20; 2984c saves list at sp+180."
+    ],
+    [
+      "Chained boot",
+      "2b384-2b3a8 dispatch table 657e0: tag 4 -> 2b780; 2b838-2b87c recursively passes same list, suffix, flags and bit0, x7=descriptor+0x5c name. Child metadata read is distinct: 29868-29888 requests final 64 bytes; 29e00-29e1c reads vbmeta using offset x28/size x25, not the boot payload."
+    ],
+    [
+      "Hash descriptor",
+      "Tag 2 -> 2b5ec. Copy descriptor to sp+498, check tag 2, reverse u64 at +0x10 into sp+4a8 (2b5f0-2b640). 2ba80-2bb14 compares name at descriptor+0x84, length then bytes, against requested list; null terminator skips unmatched descriptor. For flags 0, 2bb18-2bb50 builds partition name with suffix."
+    ],
+    [
+      "Length decision",
+      "2bbdc-2bbe8: x2=descriptor.image_size; [sp+280]=x2; if low byte of w22 zero, branch directly to 2bccc retaining x2. Else 2bbec-2bbfc calls ops+58(name,&[sp+280]); error does not fall back to old size. Success reloads x2 at 2bcc8. Both paths call 2ceb4 at 2bcdc with selected x2 and data-out=&[sp+288]."
+    ],
+    [
+      "OEM capacity",
+      "223a8-223ac gets ops from 284d8. 28544-28554 installs 27fd0 at ops+58. 28000-28054 looks up named handle via 276cc, passes block I/O to 1ee80, stores nonzero result through original x2. 1ee98-1eeb4/1eefc: (media.LastBlock+1)*media.BlockSize, with increment/product overflow checks. No footer or descriptor input."
+    ],
+    [
+      "Read contract",
+      "2ced4 saves requested count in x20. Optional ops+20 requires exact count if pointer supplied (2cf5c-2cfc8); normal ops constructor zero-allocates and does not install +20. 2d000-2d02c allocates x20 and calls ops+18(name,offset=0,count=x20,buf,&actual); 2d060-2d068 requires actual==x20. 28500-28514 binds +18 to 271e8: 27338/273f8-27404 limits to min(remaining partition,request); aligned block read uses indirect 27680 and accumulates count 276b4-276c0. Short read is not a successful short boot buffer."
+    ],
+    [
+      "Hash versus returned size",
+      "2bd5c-2bd74 sets x29=min(descriptor length, selected read length); sha256 branch 2be54-2be80 updates with salt then data pointer and w2=w29. At these sizes no 32-bit narrowing loss. Mismatch 2bef0-2bf38 sets w29=3 and enters 2bd04; requires nonnull data, free entry and successful allocations. 2bddc-2be44 uses entry stride 0x38, writes name +0, buffer +8, selected [sp+280] to +0x10 and result +0x1c. No substitution of hash length."
+    ],
+    [
+      "Return",
+      "2b964-2b97c can carry result 3 in w28 and continue descriptors with bit0 set; helper returns w28 at 29930. 28968-28978/28a64-28a80 filters result before further processing. On output path 293d8-293e0 stores slot x28 through x21 (saved x4); 29404/288a4 returns result, not a byte count. Other failures can intervene."
+    ],
+    [
+      "Consumer",
+      "After normal nonnull result gate 22e30, 22ef4-22f78 matches requested/loaded names; 22f7c-22fd4 copies name, pointer and u64 size unchanged into 24-byte entries at info+128 (hex), count +428. 1a774 lookup returns +8 and +0x10 through x1/x2. Normal boot lookup 23270-23280; 232a0 requires data_size>0x65f; 233e8-23414 checks ANDROID!. This threshold is not a kernel-length cap."
+    ],
+    [
+      "v4 source span",
+      "23438-23464 reads version at boot+0x28; 23544/235a4-235b8 requires VNDRBOOT on v4. 2365c/237b4-23894 obtains page from vendor+0xc, kernel_size LE32 from boot+8; 23500-2350c/23618-23630 check nonzero and rounded kernel span; 238f0-2391c adds page and rounded ramdisk with overflow checks. Separately BootLinux 11b38-11b5c retrieves boot buffer/size; 11bf4/11d60 -> v4, 12228-12258 via 63af8-63b18 stores kernel_size at sp+59c and vendor page at sp+598. 12010-12028 payload=boot pointer+page. Raw ARM64 route 12498-124a8/12508-12510 -> 16404-16418 passes destination, payload pointer and header kernel_size to indirect +0x160. The fit below is interval arithmetic, not a claim of an explicit kernel_end <= data_size guard there."
+    ]
+  ],
+  "source_fit_bytes": {
+    "kernel_start": 4096,
+    "kernel_end_exclusive": 44608000,
+    "page_rounded_end": 44609536,
+    "outside_old_descriptor": 3074560,
+    "remaining_to_partition_end": 56055296,
+    "interpretation": "With bit0 clear, descriptor-sized source would be short by 3,074,560 kernel bytes; the retained mismatch is not an accepted normal strict result. With bit0 set and successful full read, even the rounded end fits. No compression needed to meet this particular source bound."
+  },
+  "kernel_formats": {
+    "gzip": "1202c-12064 requires kernel_size>=10 and bytes 1f 8b 08, sets sp+5f2. 12378-12384 requires upper bound > load address; 12470-12484 takes their difference as capacity, rejects high 32 bits. 12538-1254c further requires size>10 and input size strictly less than capacity. 1257c-12598 sets stream destination/available out to load address/capacity, input after 10-byte header. Inflate failure or output length <=8 rejected at 17380-173a8. Success rejoins header checks via 173d4-173fc. Not a generic guarantee for every gzip stream.",
+    "raw": "Non-gzip 12068-1209c tests 16-byte UNCOMPRESSED_IMG marker, otherwise tests payload+0x38 against 0x644d5241. At 1641c-16444 ARM64 runtime image_size at payload+0x10 must fit [sp+570]-[sp+558]. Those addresses depend on boot parameters and reservations (120d4/12100, fallback 1211c-12160, 12340-12384), not on AVB data_size.",
+    "lz4": "No LZ4 test or decoder edge established in this normal dispatch. Non-gzip goes to marker/raw checks; not evidence for LZ4 support or a claim about all firmware paths."
+  },
+  "limitations": [
+    "Static conditions, not current phone state, live partition geometry or observed reads. Indirect firmware I/O, memory allocation, copy and boot-parameter services were not executed.",
+    "Exact source fit does not establish destination fit, all other partition checks, kernel compatibility, AK3 readiness or hardware boot. No verification change, build or package."
+  ],
+  "followup": "Keep the signed-content mismatch separate from source extent. For a destination-fit finding, compare the exact candidate ARM64 runtime image_size and the applicable OEM memory span/reservations using independently identified public inputs; do not substitute file length or partition capacity."
+}

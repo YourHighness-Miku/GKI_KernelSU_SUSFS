@@ -1,0 +1,237 @@
+{
+  "result": "Bound static provider value on the packaged post-DDR map path: KernelSize=0x10000000 (256 MiB), KernelBaseAddr=0xc7800000. Not an observed variable or a minimum over arbitrary handoffs. The SEC implementation of the QcomBds lookup is present; it is not an unresolved protocol assumption.",
+  "ota": {
+    "public_url": "https://bigota.d.miui.com/OS4.0.7.0.XPACNXM/nezha-ota_full-OS4.0.7.0.XPACNXM-user-17.0-5d0985edfa.zip",
+    "manifest_sha256_from_identity": "9e888cc69b2b94c36d793b9f8cc1400d0294e0a218224bab640f083c9c03701d"
+  },
+  "input_sha256": {
+    "firmware-reference/identity.json": "a5187d423dce7ee8f3d7f9f78033ca2778497fdebcba6fbc00f0204a2e31934b",
+    "firmware-reference/uefi.img": "04ae90ea829ff2fadc0f98e6e947d1edc6258f16ce2dea2dacd449fecf95b1af",
+    "firmware-reference/xbl_config.img": "2ee3834fee96cb9a1ee70861c688f361c6decaa639452a74d7f45d774a9180bd",
+    "firmware-provider/QcomBds.efi": "77637e20389f33a8a0e841193d7f25cbebfdbbc0f7d9b819c84707714225f6f3",
+    "firmware-provider/QcomBds-origin.json": "68b7e623caf5ff8c2a2be4e005aa596f3bdbafc70493a8e503f7923f1dd2c9a6",
+    "firmware-provider/fdt-index.json": "1b78f67f54ee914708162dfa75a269b844669fc82f4b6bfe9a16309a678e80be",
+    "abl-memory-evidence.json": "1b15cb595f79cfed2a14974840cfe6733dd50a027a1596caabc30838f28e2f87"
+  },
+  "method": "Static byte parsing, bounded LZMA-alone decode in memory and Capstone 5.0.6 AArch64. No firmware execution or device access. Parent ABL/candidate results used by reference, not re-derived here.",
+  "coordinate_systems": {
+    "QcomBds": "QcomBds coordinates are hex PE RVAs: ImageBase 0; .text RVA/raw 0x1000 length 0x1d000; .data RVA/raw 0x1e000 length 0x2000; .reloc RVA/raw 0x20000 length 0x1000. PE bytes match decompressed FV payload exactly.",
+    "origin": "uefi.img 2793472 bytes. FV @0x1000; compressed FFS @0x55238, GUID-defined section @0x55250 size 0xad5d7 data offset 0x18. Decoded 4722696 bytes. Inner FFS @0x422bc0 GUID 5a50aa81-c3ae-4608-a0e3-41a2e69baf94 UI QcomBds, PE section @0x422be0 payload @0x422be4 length 135168.",
+    "SEC": "SEC coordinates below are absolute FILE OFFSETS in uefi.img, not QcomBds RVAs. Outer FV SEC FFS @0x1fe8, TE section @0x2f34, TE payload @0x2f38 AArch64, ImageBase 0xc6801000, StrippedSize 0xf60. TE raw mapping file=0x2f38+0x28-0xf60+original_raw; .text original RVA/raw 0x1000 => file 0x3000, .data RVA 0x3e000 => file 0x40000. Preferred VA=file+0xc67ff000 (also ELF load @file 0x1000 / VA 0xc6800000). Vtable pointer values converted using this mapping.",
+    "SEC_TE_payload_sha256": "3371e953bc9eb74b08bb8fa8f117689e578609cf20b510cb2a67b25d4f355b70"
+  },
+  "config": {
+    "source": "xbl_config.img, 397312 bytes; CFGL @0x200. pre-ddr.dtbs.bin [0x31c,0x1125c), post-ddr.dtbs.bin [0x1125c,0x43c9c). Parsed all 10 consecutive FDTs in these entries. Board/chip IDs below are raw property bytes, not a device identification.",
+    "base_fdt_sha256": "d3673c39033ab9b0013aef63f93fb3dde61e8e75d1fa0b7ac075ff8025d79ece",
+    "path": "/soc/memorymap/memory@C7800000",
+    "parent": "/soc/memorymap compatible qcom,uefimem; address-cells=2, size-cells=2",
+    "property_bytes": {
+      "device_type": "6d656d6f727900",
+      "reg": "00000000c78000000000000010000000",
+      "mem-label": "4b65726e656c00",
+      "resource-attribute": "00703c07",
+      "build-hob": "00",
+      "resource-type": "00",
+      "memory-type": "00",
+      "cache-attributes": "22"
+    },
+    "coverage": [
+      {
+        "start": "0x31c",
+        "bytes": 68080,
+        "stage": "pre-ddr",
+        "chip_info_hex": "00a000000001000000a7000000010000",
+        "compatible": [
+          "qcom,kaanapali"
+        ],
+        "kernel_label_matches": []
+      },
+      {
+        "start": "0x10d0c",
+        "bytes": 392,
+        "stage": "pre-ddr",
+        "chip_info_hex": "00a000000001000000a7000000010000",
+        "compatible": [
+          "qcom,kaanapali-pre-ddr"
+        ],
+        "fragment_targets": {
+          "/fragment@0": "/sw"
+        },
+        "property_write_nodes": []
+      },
+      {
+        "start": "0x10e94",
+        "bytes": 968,
+        "stage": "pre-ddr",
+        "chip_info_hex": "00a002d200010000",
+        "compatible": [
+          "qcom,alana-pre-ddr"
+        ],
+        "fragment_targets": {
+          "/fragment@0": "/sw",
+          "/fragment@1": "/sw"
+        },
+        "property_write_nodes": [
+          "/sw/pmic/psi",
+          "/sw/pmic/psi/pm-psi-variant",
+          "/sw/pmic/psi/pm-psi-clogic",
+          "/sw/pmic/psi/pm-psi-seq"
+        ]
+      },
+      {
+        "start": "0x1125c",
+        "bytes": 201944,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a000000001000000a7000000010000",
+        "compatible": [
+          "qcom,kaanapali"
+        ],
+        "kernel_label_matches": [
+          "/soc/memorymap/memory@C7800000"
+        ]
+      },
+      {
+        "start": "0x42734",
+        "bytes": 408,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a000000001000000a7000000010000",
+        "compatible": [
+          "qcom,kaanapali-post-ddr",
+          "qcom,kaanapali"
+        ],
+        "fragment_targets": {
+          "/fragment@0": "/sw"
+        },
+        "property_write_nodes": []
+      },
+      {
+        "start": "0x428cc",
+        "bytes": 1904,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a002d200010000",
+        "compatible": [
+          "qcom,alana-post-ddr",
+          "qcom,alana"
+        ],
+        "fragment_targets": {
+          "/fragment@0": "/sw",
+          "/fragment@1": "/soc"
+        },
+        "property_write_nodes": [
+          "/soc/usb0/ss_phy_cfg"
+        ]
+      },
+      {
+        "start": "0x4303c",
+        "bytes": 1296,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a0000000010000",
+        "fragment_targets": {
+          "/fragment@0": "/soc",
+          "/fragment@1": "/sw"
+        },
+        "property_write_nodes": [
+          "/soc/usb0/repeater_cfg",
+          "/soc/usb0/redriver_cfg",
+          "/soc/usb0/redriver_cfg/usb_i2c_cfg",
+          "/soc/usb0/wcd_cfg",
+          "/sw/pmic/haptics"
+        ],
+        "board_info_hex": "0b000100"
+      },
+      {
+        "start": "0x4354c",
+        "bytes": 1048,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a0000000010000",
+        "fragment_targets": {
+          "/fragment@0": "/soc"
+        },
+        "property_write_nodes": [
+          "/soc/usb0/repeater_cfg",
+          "/soc/usb0/redriver_cfg",
+          "/soc/usb0/redriver_cfg/usb_i2c_cfg",
+          "/soc/usb0/wcd_cfg",
+          "/soc/usb0/wcd_cfg/usb_i2c_cfg"
+        ],
+        "board_info_hex": "0b000200"
+      },
+      {
+        "start": "0x43964",
+        "bytes": 416,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a0000000010000",
+        "fragment_targets": {
+          "/fragment@0": "/soc"
+        },
+        "property_write_nodes": [
+          "/soc/usb0/repeater_cfg"
+        ],
+        "board_info_hex": "21000100"
+      },
+      {
+        "start": "0x43b04",
+        "bytes": 408,
+        "stage": "post-ddr",
+        "chip_info_hex": "00a0000000010000",
+        "fragment_targets": {
+          "/fragment@0": "/soc"
+        },
+        "property_write_nodes": [
+          "/soc/usb0/repeater_cfg"
+        ],
+        "board_info_hex": "1f000100"
+      }
+    ],
+    "conclusion": "Exactly one case-insensitive Kernel label in the post-DDR base. None of its six packaged overlay FDTs writes this node, its ancestry or a competing label. Resolved fragment targets via fixups/base symbols and inspected actual descendant writes. The pre-DDR bundle is separate, not a fallback Kernel value. The outer uefiplat.cfg @FFS 0x55000 announces migration to DT, not a second numeric source."
+  },
+  "SEC_trace_file_offsets": [
+    "DT handoff: 10d50 calls 170e0; 17110-17178 obtains shared cookie via fixed u32 @3b060 and loads DTB pointer/length at cookie+58/+60, caches blob at 4e100. 17180-171ec checks fixed address window. Local UseDTSelectLib selector initialized zero at 17108-0c: zero path 17340-68 passes supplied blob to 21a7c, not a lookup of an on-disk xbl_config offset. Alternative selector=1 code 17204-172fc would run get_dt and replace cached pointer, not taken by the traced zero initializer. Thus preceding boot-stage selection/patching remains a boundary.",
+    "10d7c -> 14240 clears table/count at 4e060/4e068; 14264 -> 14350, allocation/zero, 14420-2c opens /soc/memorymap/ via 16e00 (16e4c-5c uses cached DTB). 14474/144d0 count/cache children. 14530-54 calls 15600(node, table+i*0x48); 1459c-a4 records count. This is a path traversal, not a global match on reg.",
+    "15614-34 calls 23378(node,NULL,index=0,address_cells=2,size_cells=2,&record[0x20],&record[0x28]); literal reg at 3d3cf, property fetched at 2340c-20. 234a4-b8 / 234e0-f8 load adjacent cell pairs, convert BE64 via 2f8e4 -> 1dff0 (1e090/1e0c0), store separate u64s. 15684-98 reads mem-label into start of same record, capacity 0x20. 156e8-fc reads build-hob into +0x30.",
+    "14710 appends /soc/registermap/ records at table+count*0x48 (148fc-14930), not a replacement Kernel record. Bank/validation processing exists (10e04->15040, 10e4c->138f0). Ordinary added bank records use count-indexed destinations (e.g. 13220-38,134bc-d8,13690-ac); in-place base/size adjust at 13d0c/13d30 requires record[+0x30]==0xa at 13bf0-13c00. Packaged Kernel build-hob is 0. No Kernel-specific resize found on traced path; not a whole-machine immutability proof.",
+    "14f94-14fb0 returns table/count from 4e060/4e068; 11880-88 requests them and 118bc-d4 passes as x0/x1 to 1f810. 1f828-840 saves args, 1f890/898 caches them at 4e8e0/4e8e8. 1f868-8ac registers ASCII UEFI Config Lib @3c61e, version 0x10002, interface @404d0 via manager+8. Interface+8 @404d8 holds preferred pointer to file 1f554.",
+    "Shared manager: 1187c -> 1b994; 1b9c4-ec publishes 8-byte pointer to 40478 with GUID @40378=bedaeabc-5e70-4d66-9733-213d072b9d04. Manager slots +8/+0x10 point to 1b794/1b88c. 1b850-86c saves named entry/version/interface, 1b8f8-974 compares registry names and returns selected pointer via output. SEC 2f7cc uses same GUID and HOB+0x18 to get manager. Distinct from the variable GUID.",
+    "Registered lookup at 1f554: 1f57c-5a4 guards table/count and caller args; 1f5b0-bc compares record start against supplied ASCII name (1db58 ASCII case fold); 1f5c0-d4 visits stride 0x48 until first equal; 1f5e0-f8 copies entire matching record to caller via 19b60 and returns zero. No match returns nonzero."
+  ],
+  "QcomBds_trace_RVAs": [
+    "5428 calls 554c. At 5600-10 x0=ASCII Kernel @18471, x1=x21=sp+0x20 (out record); bl 8b08. That wrapper on empty cache calls 8ac4. 79c4/1337c/1332c finds type-4 GUID HOB matching @1e168 (same manager GUID), loads pointer at HOB+0x18. 8ad4-8af4 calls manager+0x10 with ASCII UEFI Config Lib @193ac, version 0, &cache @1e928. 8b38-50 tailcalls cached interface+8 with original x0/x1; null cache returns error. Named library binding, not inferred EFI LocateProtocol.",
+    "5614 branches on status==0 to 5650. On lookup failure, 5618-564c checks PropagateKernelSocInfo only to condition a diagnostic; bypasses BOTH writes. No numeric substitute there. SharedIMEMBaseAddr immediately before this block and SAIL_OTA following it are separate lookups.",
+    "Runtime table established at 13c0-c8 -> 12aac-b4: [SystemTable+0x58] -> global 1e9f8. 5650-5678 loads this table then slot +0x58 (EFI SetVariable); x0=UTF16 KernelBaseAddr @17e54, x1=GUID @1e068=882f8c2b-9646-435f-8de5-f208ff80c1bd, w2=2, w3=8, x4=x21+0x20=sp+0x40. 567c-569c repeats for KernelSize @17e72, same GUID, w2=2,w3=8,x4=x21+0x28=sp+0x48. No arithmetic on field values or branch on first write status. Second status not checked here either. Attribute 2 is BOOTSERVICE_ACCESS alone, not RUNTIME_ACCESS or NV; runtime-services API does not imply post-ExitBootServices visibility.",
+    "Publication precedes later mode check at 542c-34. Separate preloaded path 5498-54cc gets address/size and looks up Kernel again, 54d4-550c checks containment against +0x20/+0x28 (assert text @18ada), 553c indirect handoff. Not an alternate SetVariable size. Only QcomBds contained literal UTF16 KernelSize among 63 parsed inner PE payloads; this limited scan does not exclude dynamic names or later writers."
+  ],
+  "conditional_values": {
+    "base": 3347054592,
+    "size": 268435456,
+    "end_exclusive": 3615490048,
+    "published_u64_le": {
+      "KernelBaseAddr": "000080c700000000",
+      "KernelSize": "0000001000000000"
+    },
+    "predicate": "Earlier stage supplies this post-DDR map or its covered overlays, successful parse/registration, unchanged first Kernel record, publication path reached and both writes succeed. To use as ABL inputs both matching GetVariable calls must later succeed without intervening replacement."
+  },
+  "ABL_fit": {
+    "reference_sha256": {
+      "passed-candidate/Image": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c",
+      "passed-candidate/identity.json": "0d1019332283c9a2868bc1a214357cfa30f190f112f0d27e2ab048611b37b71d",
+      "public-policy/abl.img": "9f6a3bd6ec3c2785b2fab8101c779990cb85fc7c3de7bead2798f015b8c2da50",
+      "public-policy/abl.efi": "56ec352c42637ec1ce81bca0673e2a5f93dfb0081a8b2fe212ff9c8c2bd0d5b0",
+      "public-policy/vendor-reference/vendor_boot.img": "68a80b12e8210e0683fb0f275e0df2134db591113c9d6d91acbd34f54f4409cf",
+      "public-policy/abl-load-evidence.json": "2b5663c984bd115d2518b5b91595b8b99522bdf36264841bd695166367afb33d"
+    },
+    "receiver_RVAs": "120a0-12108 gets both 8-byte values; 12170-12194/12314-12384 uses successful pair. Not the fallback span.",
+    "equation": "Nonwrapping arithmetic, raw Image text_offset=0: require S >= H + D; D=align_up(V+R+E,P)+2*P+0x400000.",
+    "H": 47775744,
+    "P": 4096,
+    "V": 22246717,
+    "R0_E0": {
+      "D": 26451968,
+      "required_S": 74227712,
+      "usable_span": 241983488,
+      "margin_bytes": 194207744,
+      "fits": true
+    },
+    "init_boot": "For E=0 and page-rounded R, required S=74227712+R. Max such R at this S: 194207744 bytes. For nonzero E recompute alignment; R not measured here."
+  },
+  "limits": "No live cookie/board selection, successful SetVariable/GetVariable status, actual init_boot selection, or universal later-writer exclusion established. Public DT paths and static provider binding only. No runtime, full boot, global module or release PASS. Original modified-boot AVB content hash failure unchanged; no signature/verification change and no ZIP."
+}

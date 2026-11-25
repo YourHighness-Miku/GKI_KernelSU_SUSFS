@@ -1,0 +1,20 @@
+{
+  "init_boot_sha256": "1f5105d5fba35d5a6ef14a429de595a7149044dcac2b90e74a18ac413b9933f2",
+  "init_boot_file_bytes": 8388608,
+  "header_version": 4,
+  "kernel_bytes": 0,
+  "ramdisk_bytes": 2588339,
+  "page_rounded_R": 2588672,
+  "vendor_page_P": 4096,
+  "vendor_ramdisk_V": 22246717,
+  "auxiliary_E": 0,
+  "candidate_runtime_H": 47775744,
+  "given_stock_published_window_S": 268435456,
+  "reserved_D": 29040640,
+  "required_window": 76816384,
+  "provider_path_margin": 191619072,
+  "provider_path_conditional_fit": true,
+  "fallback_min_span": 60612608,
+  "fallback_conditional_fit": true,
+  "scope": "Actual same-OTA init_boot and vendor_boot headers, given packaged provider path and no auxiliary ramdisk; not live selection, auth or hardware boot"
+}

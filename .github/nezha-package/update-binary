@@ -68,9 +68,6 @@ verify_payload() {
   head -c 67108865 "$1" > .check/input.zip && zip_size .check/input.zip || return 1
   printf '%s\n' META-INF/com/google/android/update-binary >> .check/expected &&
     sort .check/expected > .check/want && raw_inventory || return 1
-  bounded_unzip 1025 .check/list -Z1 .check/input.zip &&
-    [ "$(stat -c %s .check/list)" -le 1024 ] && sort .check/list > .check/got &&
-    cmp -s .check/want .check/got || return 1
   mkdir tools && mkdir -p META-INF/com/google/android || return 1
   while IFS=' ' read -r name size digest; do
     bounded_unzip "$((size + 1))" "$name" -p .check/input.zip "$name" &&

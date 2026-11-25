@@ -1,0 +1,120 @@
+{
+  "status": "CONDITIONAL_SELECTED_CRCS_MATCH",
+  "source_audit_run": 45579562778,
+  "source_candidate_run": 45524716598,
+  "raw_status_unchanged": "UNKNOWN",
+  "raw_counts_replayed": {
+    "matched": 59283,
+    "wrong_crc": 0,
+    "missing_or_external": 6,
+    "unsupported": 0
+  },
+  "raw_occurrences": 1081,
+  "excluded_original_ids": [
+    7,
+    33,
+    106,
+    146
+  ],
+  "conditional_occurrences": 1077,
+  "conditional_counts_replayed": {
+    "matched": 58829,
+    "wrong_crc": 0,
+    "missing_or_external": 0,
+    "unsupported": 0
+  },
+  "six_issue_dispositions": [
+    {
+      "original_id": 33,
+      "root_index": 0,
+      "path": "flatten/lib/modules/zram.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 921935841,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "EXCLUDED_BY_GIVEN_STOCK_FILTER"
+    },
+    {
+      "original_id": 146,
+      "root_index": 0,
+      "path": "lib/modules/6.12.69-android16-6-g43b5ab7e247d-abogki561813157-4k/kernel/drivers/block/zram/zram.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 921935841,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "EXCLUDED_BY_GIVEN_STOCK_FILTER"
+    },
+    {
+      "original_id": 307,
+      "root_index": 1,
+      "path": "lib/modules/node_cache.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 402978236,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "matched",
+      "provider": {
+        "original_id": 643,
+        "root_index": 2,
+        "path": "0/lib/modules/zsmalloc.ko",
+        "expanded_sha256": "350f7127f0a8cda912eea8dfe6d93dbf30e5b31832969aa44ee6161424eaed3e"
+      },
+      "observed_crc": 402978236
+    },
+    {
+      "original_id": 332,
+      "root_index": 1,
+      "path": "lib/modules/zram.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 402978236,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "matched",
+      "provider": {
+        "original_id": 643,
+        "root_index": 2,
+        "path": "0/lib/modules/zsmalloc.ko",
+        "expanded_sha256": "350f7127f0a8cda912eea8dfe6d93dbf30e5b31832969aa44ee6161424eaed3e"
+      },
+      "observed_crc": 402978236
+    },
+    {
+      "original_id": 721,
+      "root_index": 2,
+      "path": "0/lib/modules/node_cache.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 402978236,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "matched",
+      "provider": {
+        "original_id": 643,
+        "root_index": 2,
+        "path": "0/lib/modules/zsmalloc.ko",
+        "expanded_sha256": "350f7127f0a8cda912eea8dfe6d93dbf30e5b31832969aa44ee6161424eaed3e"
+      },
+      "observed_crc": 402978236
+    },
+    {
+      "original_id": 746,
+      "root_index": 2,
+      "path": "0/lib/modules/zram.ko",
+      "symbol": "zs_malloc",
+      "required_crc": 402978236,
+      "raw_comparison": "missing_or_external",
+      "conditional_disposition": "matched",
+      "provider": {
+        "original_id": 643,
+        "root_index": 2,
+        "path": "0/lib/modules/zsmalloc.ko",
+        "expanded_sha256": "350f7127f0a8cda912eea8dfe6d93dbf30e5b31832969aa44ee6161424eaed3e"
+      },
+      "observed_crc": 402978236
+    }
+  ],
+  "assumptions_not_established_by_this_check": [
+    "The original normal system-script filter is the effective request policy",
+    "No other requester or preloaded module defeats that filter",
+    "Effective init properties, mounts and services follow the retained original route"
+  ],
+  "scope": "Replayed static CRC graph under the given immutable stock-filter hypothesis only",
+  "runtime_provider_observed": false,
+  "raw_global_audit_passed": false,
+  "boot_verified": false,
+  "release_authorized": false
+}

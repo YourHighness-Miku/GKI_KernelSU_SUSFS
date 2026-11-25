@@ -1,0 +1,4 @@
+Verifying image /tmp/tmpyr62glcj/boot.img using embedded public key
+vbmeta: Successfully verified footer and SHA256_RSA4096 vbmeta struct in /tmp/tmpyr62glcj/boot.img
+sha256 digest of /tmp/tmpyr62glcj/boot.img does not match digest in descriptor
+/home/runner/work/GKI_KernelSU_SUSFS/GKI_KernelSU_SUSFS/tools/avbtool.py: Error verifying descriptor.

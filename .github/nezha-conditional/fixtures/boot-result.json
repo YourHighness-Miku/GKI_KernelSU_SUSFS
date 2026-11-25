@@ -1,0 +1,81 @@
+{
+  "checks": {
+    "boot-info": {
+      "returncode": 0
+    },
+    "stock-boot-verify": {
+      "returncode": 0
+    },
+    "vbmeta-info": {
+      "returncode": 0
+    },
+    "vbmeta_system-info": {
+      "returncode": 0
+    },
+    "unpack": {
+      "returncode": 0
+    },
+    "repack": {
+      "returncode": 0
+    },
+    "repacked-boot-info": {
+      "returncode": 0
+    },
+    "repacked-boot-verify": {
+      "returncode": 1
+    }
+  },
+  "offline_gate_passed": false,
+  "delivery_state": "BLOCKED",
+  "scope": {
+    "whole_boot_footer_avb": "Checks listed separately below",
+    "boot_v4_signature_region": "Hashed only; not independently signature-verified",
+    "outer_vbmeta_chain": "Metadata recorded only; complete descriptor chain NOT verified",
+    "oem_bootloader_trust": "UNKNOWN",
+    "unlocked_device_acceptance": "UNKNOWN"
+  },
+  "limitations": [
+    "No device execution or installable archive",
+    "No verification flags changed, signatures created, or replacement bootchain published",
+    "Even a standalone offline pass does not establish full boot-chain validity or hardware bootability"
+  ],
+  "stage": "repacked-boot-verify",
+  "candidate_image_sha256": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c",
+  "reference_boot_layout": {
+    "header_version": 4,
+    "header_bytes": 1584,
+    "partition_bytes": 100663296,
+    "kernel_bytes": 41511424,
+    "ramdisk_bytes": 0,
+    "signature_bytes": 0,
+    "kernel_sha256": "ed9e27aa606772d058684e023fcb2d3dca876505be90227cc8ca5e5d5b95622b",
+    "ramdisk_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "header_metadata_sha256": "3c88019de260099905c584c0a2803b38d337757b228e187cd8be14b66705c7c9"
+  },
+  "reference_vbmeta_blob": {
+    "bytes": 2432,
+    "sha256": "d10d34c8d68f880a554c14b4b65340efe9a68983997dc59493c83a11e5fd678e"
+  },
+  "repacked_image_sha256": "2a49d69e6c0ab4d89364f6d598c5b30983fe2fba0a618f9fcfa1cea4ece7c5bf",
+  "repacked_vbmeta_blob": {
+    "bytes": 2432,
+    "sha256": "d10d34c8d68f880a554c14b4b65340efe9a68983997dc59493c83a11e5fd678e"
+  },
+  "signed_vbmeta_blob_unchanged": true,
+  "repacked_boot_layout": {
+    "header_version": 4,
+    "header_bytes": 1584,
+    "partition_bytes": 100663296,
+    "kernel_bytes": 44603904,
+    "ramdisk_bytes": 0,
+    "signature_bytes": 0,
+    "kernel_sha256": "278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c",
+    "ramdisk_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "header_metadata_sha256": "3c88019de260099905c584c0a2803b38d337757b228e187cd8be14b66705c7c9"
+  },
+  "structural_roundtrip_passed": true,
+  "signing_metadata_unchanged": true,
+  "signing_metadata_comparison_scope": "Selected avbtool text fields only; complete blob compared separately"
+}
