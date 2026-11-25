@@ -141,6 +141,17 @@ class TestArm64Tools(unittest.TestCase):
                                        ('_a', '_b', 1), ('_b', '_a', 1), ('', '', 1)):
             self.run_bb('ash', '-c', body, 'nova', requested, raw, status=status)
 
+    def test_masked_observations_do_not_authorize_the_boot_chain(self):
+        functions = '\n'.join(self.helper(name) for name in (
+            'unlocked_values_allowed', 'boot_policy_class', 'installer_stop', 'require_supported_policy_values'))
+        body = functions + '\nboot_policy_class "$@"'
+        result = self.run_bb('ash', '-c', body, 'policy', '1', 'locked', '', 'locked')
+        self.assertEqual(result, b'reported_locked_or_masked\n')
+        body = functions + '\nrequire_supported_policy_values "$@" 2>&1'
+        result = self.run_bb('ash', '-c', body, 'policy', '1', 'locked', '', 'locked', status=1)
+        self.assertTrue(result.startswith(b'ui_print Nezha[E_BOOT_POLICY_UNVERIFIED]'))
+
+
     def test_regular_file_copy_hash_and_count(self):
         data = bytes(range(256)) * 4096 + b'partial final block'
         (self.work / 'input').write_bytes(data)

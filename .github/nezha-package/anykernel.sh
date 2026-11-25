@@ -32,6 +32,34 @@ read_vendor_patch() {
 unlocked_values_allowed() {
   [ "$1:$2:$3:$4" = '0:unlocked:0:unlocked' ]
 }
+boot_policy_class() {
+  [ "$#" -eq 4 ] || return 1
+  if unlocked_values_allowed "$@"; then
+    printf 'reported_unlocked_consistent\n'
+  elif [ "$1:$2:$4" = '1:locked:locked' ] && { [ -z "$3" ] || [ "$3" = 1 ]; }; then
+    printf 'reported_locked_or_masked\n'
+  else
+    printf 'unverified_or_conflicting\n'
+  fi
+}
+require_supported_policy_values() {
+  local observation
+  observation=$(boot_policy_class "$@") || installer_stop E_BOOT_POLICY_READ 'Cannot classify boot-policy observations.'
+  case $observation in
+    reported_unlocked_consistent) return 0 ;;
+    reported_locked_or_masked)
+      installer_stop E_BOOT_POLICY_UNVERIFIED 'Reported lock state may be masked; the modified boot-chain profile is not verified. Device/slot checks are separate.' ;;
+    *) installer_stop E_BOOT_POLICY_UNVERIFIED 'Boot-policy observations are missing or inconsistent; this does not establish the hardware lock state.' ;;
+  esac
+}
+require_boot_policy() {
+  local locked state raw_locked raw_state
+  locked=$("$PROP_TOOL" ro.boot.flash.locked) || installer_stop E_BOOT_POLICY_READ 'Cannot read the reported flash-lock state.'
+  state=$("$PROP_TOOL" ro.boot.vbmeta.device_state) || installer_stop E_BOOT_POLICY_READ 'Cannot read the reported verification state.'
+  raw_locked=$(boot_value androidboot.flash.locked) || installer_stop E_BOOT_RECORD 'Invalid or conflicting flash-lock records.'
+  raw_state=$(boot_value androidboot.vbmeta.device_state) || installer_stop E_BOOT_RECORD 'Invalid or conflicting verification-state records.'
+  require_supported_policy_values "$locked" "$state" "$raw_locked" "$raw_state"
+}
 slots_agree() {
   case "$1" in _a|_b) ;; *) return 1 ;; esac
   [ "$1" = "$2" ] && { [ -z "$3" ] || [ "$3" = "${1#_}" ]; }
@@ -76,15 +104,10 @@ boot_value() {
   printf '%s' "$combined"
 }
 current_slot() {
-  local prop proc letter prop_letter device version locked state raw_locked raw_state
+  local prop proc letter prop_letter device version
   device=$("$PROP_TOOL" ro.product.device) || return 1
   version=$("$PROP_TOOL" ro.build.version.release) || return 1
   [ "$device:$version" = nezha:17 ] || return 1
-  locked=$("$PROP_TOOL" ro.boot.flash.locked) || return 1
-  state=$("$PROP_TOOL" ro.boot.vbmeta.device_state) || return 1
-  raw_locked=$(boot_value androidboot.flash.locked) || return 1
-  raw_state=$(boot_value androidboot.vbmeta.device_state) || return 1
-  unlocked_values_allowed "$locked" "$state" "$raw_locked" "$raw_state" || return 1
   prop=$("$PROP_TOOL" ro.boot.slot_suffix) || return 1
   proc=$(boot_value androidboot.slot_suffix) || return 1
   letter=$(boot_value androidboot.slot) || return 1
@@ -156,7 +179,8 @@ REFERENCES
 }
 nezha_write_verified() {
   local actual current
-  [ "$(current_slot)" = "$FROZEN_SLOT" ] || abort 'Boot state changed; refusing write.'
+  [ "$(current_slot)" = "$FROZEN_SLOT" ] || abort 'Device or slot changed; refusing write.'
+  require_boot_policy
   current=$(reference_identities) || abort 'Reference state changed; refusing write.'
   [ "$current" = "$FROZEN_IDENTITIES" ] || abort 'Partition identities changed; refusing write.'
   [ "$(readlink -f "$BLOCK")" = "$FROZEN_BOOT" ] || abort 'Target changed; refusing write.'
@@ -164,7 +188,8 @@ nezha_write_verified() {
   [ "$(wc -c < "$AKHOME/boot-new.img")" -eq 100663296 ] || abort 'Output geometry differs.'
   actual=$(sha256sum "$AKHOME/boot-new.img") || abort 'Cannot hash output.'
   [ "${actual%% *}" = "$EXPECTED_REPACKED_SHA256" ] || abort 'Output differs from the accepted offline transformation.'
-  [ "$(current_slot)" = "$FROZEN_SLOT" ] || abort 'Boot state changed before write.'
+  [ "$(current_slot)" = "$FROZEN_SLOT" ] || abort 'Device or slot changed before write.'
+  require_boot_policy
   [ "$(partition_node boot)" = "$FROZEN_BOOT" ] || abort 'Target changed before write.'
   mkdir "$AKHOME/write-gate" 2>/dev/null || abort 'Cancelled before write or write already committed.'
   trap '' HUP INT TERM
@@ -194,8 +219,9 @@ PROP_TOOL=/system/bin/getprop
 [ -x "$PROP_TOOL" ] || installer_stop E_PROPERTY 'Trusted property tool unavailable.'
 vendor_patch=$(read_vendor_patch /vendor/build.prop) || installer_stop E_VENDOR 'Cannot read one vendor patch record.'
 vendor_patch_allowed "$vendor_patch" || installer_stop E_VENDOR 'Vendor patch differs from the supported OTA.'
-FROZEN_SLOT=$(current_slot) || installer_stop E_BOOT_STATE 'Device, unlock state or requested/actual slot conflicts.'
-FROZEN_IDENTITIES=$(reference_identities) || installer_stop E_REFERENCE 'Pinned partition identity, capacity or ownership differs.'
+FROZEN_SLOT=$(current_slot) || installer_stop E_DEVICE_SLOT 'Device, system or requested/actual slot conflicts; lock-state observations are checked separately.'
+require_boot_policy
+FROZEN_IDENTITIES=$(reference_identities) || installer_stop E_REFERENCE 'Pinned partition identity, capacity or ownership differs; no stock firmware will be restored.'
 FROZEN_BOOT=$(partition_node boot) || installer_stop E_TARGET 'Cannot identify the active boot partition.'
 readonly FROZEN_SLOT FROZEN_IDENTITIES FROZEN_BOOT PROP_TOOL EXPECTED_REPACKED_SHA256 AKHOME REQUESTED_SLOT
 getprop() { "$PROP_TOOL" "$@"; }

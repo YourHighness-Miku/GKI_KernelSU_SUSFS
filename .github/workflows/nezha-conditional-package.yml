@@ -1,5 +1,5 @@
-name: Nezha conditional AK3 assembly
-run-name: Nezha already-unlocked conditional AK3 — exact prior Image, no kernel rebuild
+name: Nezha source validation — delivery withheld
+run-name: Nezha modified boot-chain applicability unverified — tests only, no candidate
 on:
   push:
     branches: [fix/nezha-r74-binder-baseline]
@@ -36,11 +36,14 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/nezha-package -p 'test_*.py' -v
           python3 -m unittest discover -s .github/nezha-conditional -p 'test_*.py' -v
+      - name: Record delivery hold for the unverified modified boot chain
+        run: python3 .github/nezha-conditional/delivery.py --output package-out/delivery-hold.json
       - name: Assemble and verify one restricted conditional AK3 without running its installer
+        if: ${{ false }}
         run: |
           python3 .github/nezha-conditional/build.py --image inputs/Image --assets inputs/assets --evidence inputs/evidence --runs inputs/runs.json --output package-out
       - name: Publish only the verified candidate archive, not a release
-        if: success()
+        if: ${{ false }}
         uses: actions/upload-artifact@v4
         with:
           name: nezha-conditional-ak3-${{ github.run_id }}
@@ -54,6 +57,7 @@ jobs:
         with:
           name: nezha-conditional-report-${{ github.run_id }}
           path: |
+            package-out/delivery-hold.json
             package-out/conditional-package.json
             inputs/runs.json
           if-no-files-found: warn

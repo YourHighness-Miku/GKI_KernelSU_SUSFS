@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 
 from gate import REPACKED_SHA, evaluate, load_bound, validate_runs
+from delivery import require_delivery_approval
 from preflight import ASSETS, IMAGE_SHA, assess, prepare_backend, prepare_core, read_regular, require
 
 ARCHIVE_NAME = 'Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-nova-entry-v2.zip'
@@ -56,6 +57,7 @@ def build(image, assets, evidence_directory, runs_path, output):
             and os.environ.get('GITHUB_REPOSITORY') == 'YourHighness-Miku/GKI_KernelSU_SUSFS'
             and os.environ.get('GITHUB_REF') == 'refs/heads/fix/nezha-r74-binder-baseline',
             'Real package assembly is GitHub Actions only on the authorized branch')
+    require_delivery_approval()
     validate_runs(json.loads(read_regular(runs_path, 1048576)))
     evidence = load_bound(evidence_directory)
     decision = evaluate(evidence)
