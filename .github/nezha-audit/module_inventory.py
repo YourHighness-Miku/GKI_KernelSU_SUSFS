@@ -88,9 +88,15 @@ class Elf:
 
     def versions(self):
         basic, names, crcs = map(self.named, (b'__versions', b'__version_ext_names', b'__version_ext_crcs'))
-        result = {}
+        result, legacy = {}, {}
+        if basic is not None:
+            require(len(basic) % 64 == 0 and len(basic) // 64 <= MAX_RECORDS, 'invalid __versions size')
+            for crc, field in struct.iter_unpack('<Q56s', basic):
+                name = symbol(string_at(field, 0))
+                require(crc <= 0xffffffff and name not in legacy, 'invalid basic version record')
+                legacy[name] = crc
         if names is not None or crcs is not None:
-            require(not basic and names is not None and crcs is not None and len(crcs) % 4 == 0
+            require(names is not None and crcs is not None and len(crcs) % 4 == 0
                     and len(crcs) // 4 <= MAX_RECORDS, 'invalid extended version sections')
             pos = 0
             for crc, in struct.iter_unpack('<I', crcs):
@@ -100,14 +106,12 @@ class Elf:
                 require(name not in result, 'duplicate version requirement')
                 result[name] = crc
             require(not names[pos:].strip(b'\0'), 'excess extended version names')
-            fmt = 'extended'
+            # modpost can emit both: short-name basic records must agree with the full extended set.
+            require(all(result.get(name) == crc for name, crc in legacy.items()),
+                    'conflicting basic/extended version records')
+            fmt = 'basic+extended' if basic is not None else 'extended'
         elif basic is not None:
-            require(len(basic) % 64 == 0 and len(basic) // 64 <= MAX_RECORDS, 'invalid __versions size')
-            for crc, field in struct.iter_unpack('<Q56s', basic):
-                name = symbol(string_at(field, 0))
-                require(crc <= 0xffffffff and name not in result, 'invalid basic version record')
-                result[name] = crc
-            fmt = 'basic'
+            result, fmt = legacy, 'basic'
         else:
             fmt = 'absent'
         return fmt, result

@@ -22,9 +22,9 @@ def synthetic_elf(*, fmt='extended', required=((b'kernel_symbol', 123),), undefi
         return len(sections) - 1
 
     add(b'.modinfo', 1, b'license=GPL\0vermagic=synthetic ARM64\0')
-    if fmt == 'basic':
-        add(b'__versions', 1, b''.join(struct.pack('<Q56s', v, k) for k, v in required))
-    if fmt == 'extended':
+    if fmt in ('basic', 'both'):
+        add(b'__versions', 1, b''.join(struct.pack('<Q56s', v, k) for k, v in required if len(k) < 56))
+    if fmt in ('extended', 'both'):
         add(b'__version_ext_names', 1, b''.join(k + b'\0' for k, _ in required))
         add(b'__version_ext_crcs', 1, b''.join(struct.pack('<I', v) for _, v in required))
     for name, payload in extra:
@@ -127,6 +127,23 @@ class InventoryTests(unittest.TestCase):
                 self.assertEqual(r['counts']['wrong_crc'], 0)
                 self.assertEqual(r['counts']['missing_or_external'], int(not matched))
                 self.assertEqual(r['status'], 'OBSERVED_CRCS_MATCH' if matched else 'UNKNOWN')
+
+    def test_basic_and_extended_versions_coexist_with_long_names(self):
+        long_name = b'long_rust_import_' + b'x' * 80
+        self.sym.write_bytes(self.sym.read_bytes() + b'0x000001c8\t' + long_name + b'\tvmlinux\tEXPORT_SYMBOL\t\n')
+        (self.tree / 'both.ko').write_bytes(synthetic_elf(fmt='both', required=((b'kernel_symbol', 123), (long_name, 456))))
+        result = self.cli(expect=0)
+        self.assertEqual(result['counts']['matched'], 2)
+        self.assertEqual(result['modules'][0]['version_format'], 'basic+extended')
+
+    def test_conflicting_or_uncovered_basic_records_cannot_override_extended(self):
+        for legacy in (struct.pack('<Q56s', 124, b'kernel_symbol'), struct.pack('<Q56s', 8, b'ext')):
+            with self.subTest(legacy=legacy):
+                (self.tree / 'bad.ko').write_bytes(synthetic_elf(extra=((b'__versions', legacy),)))
+                result = self.cli()
+                self.assertEqual(result['status'], 'UNKNOWN')
+                self.assertIn('conflicting basic/extended version records', result['modules'][0]['error'])
+
 
     def test_aliases_cannot_turn_self_exports_into_provider_evidence(self):
         nested = self.tree / 'nested'
