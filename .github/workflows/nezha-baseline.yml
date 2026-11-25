@@ -160,6 +160,14 @@ jobs:
         shell: bash
         timeout-minutes: 35
         run: |
+          preserve_console() {
+            rc=$?
+            if [ -f "$RUNNER_TEMP/nezha-kunit/test.log" ]; then
+              cp "$RUNNER_TEMP/nezha-kunit/test.log" "$GITHUB_WORKSPACE/reports/kunit-console.log"
+            fi
+            exit "$rc"
+          }
+          trap preserve_console EXIT
           cd kernel/common
           mkdir -p "$RUNNER_TEMP/nezha-kunit/security/selinux"
           gcc -O2 -Wall -Iinclude/uapi -Iinclude -Isecurity/selinux/include \
@@ -173,7 +181,7 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O="$RUNNER_TEMP/nezha-kunit" INSTALL_HDR_PATH="$RUNNER_TEMP/nezha-kunit/usr" headers_install
           test -s "$RUNNER_TEMP/nezha-kunit/usr/include/linux/unistd.h"
           cp "$RUNNER_TEMP/nezha-kunit/.config" "$GITHUB_WORKSPACE/reports/kunit-built.config"
-          python3 tools/testing/kunit/kunit.py run --arch arm64 --cross_compile aarch64-linux-gnu- --kunitconfig "$GITHUB_WORKSPACE/.github/scripts/nezha_sysv.kunitconfig" --build_dir "$RUNNER_TEMP/nezha-kunit" --jobs 3 --timeout 180 'nezha-sysv-state*' 2>&1 | tee "$GITHUB_WORKSPACE/reports/kunit.log"
+          python3 tools/testing/kunit/kunit.py run --arch arm64 --cross_compile aarch64-linux-gnu- --kunitconfig "$GITHUB_WORKSPACE/.github/scripts/nezha_sysv.kunitconfig" --build_dir "$RUNNER_TEMP/nezha-kunit" --jobs 3 --timeout 180 --kernel_args='earlycon=pl011,0x09000000' --kernel_args=ignore_loglevel --kernel_args=initcall_debug 'nezha-sysv-state*' 2>&1 | tee "$GITHUB_WORKSPACE/reports/kunit.log"
       - name: Require all four actual ARM64 SysV tests to pass without skips
         run: python3 .github/scripts/nezha_full_gate.py kunit reports/kunit.log reports/combined-kunit-result.json
       - name: Compile combined 4K features without any CRC edits
