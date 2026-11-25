@@ -143,6 +143,23 @@ def boot_layout(data):
             'header_metadata_sha256': digest(data[:8] + data[12:4096])}
 
 
+def avb_blob(data):
+    if len(data) < 64:
+        raise ValueError('Truncated AVB footer')
+    magic, major, minor, original, offset, size, reserved = struct.unpack_from('>4sIIQQQ28s', data, len(data) - 64)
+    if (magic != b'AVBf' or (major, minor) != (1, 0) or reserved != bytes(28)
+            or not 0 < original <= offset or not 256 <= size <= 2 * 1024**2
+            or offset + size > len(data) - 64):
+        raise ValueError('Invalid AVB footer range or version')
+    blob = bytes(data[offset:offset + size])
+    if blob[:4] != b'AVB0':
+        raise ValueError('Missing embedded vbmeta header')
+    auth, auxiliary = struct.unpack_from('>QQ', blob, 12)
+    if auth % 64 or auxiliary % 64 or 256 + auth + auxiliary != size:
+        raise ValueError('Embedded vbmeta block sizes differ')
+    return blob
+
+
 def signing_metadata(text):
     keys = (r'Public key \(sha1\)', 'Algorithm', 'Flags', 'Rollback Index', 'Rollback Index Location')
     result = {}
@@ -179,7 +196,10 @@ def _assess(reference, candidate, tools, reports, report):
             stock_info = info.stdout
         if name == 'boot':
             run('stock-boot-verify', avb + ['verify_image', '--image', str(reference / 'boot.img')], reference)
-    report['reference_boot_layout'] = boot_layout((reference / 'boot.img').read_bytes())
+    original_boot = (reference / 'boot.img').read_bytes()
+    original_blob = avb_blob(original_boot)
+    report['reference_boot_layout'] = boot_layout(original_boot)
+    report['reference_vbmeta_blob'] = {'bytes': len(original_blob), 'sha256': digest(original_blob)}
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         boot = reference / 'boot.img'
@@ -191,7 +211,11 @@ def _assess(reference, candidate, tools, reports, report):
         if run('repack', packer + ['repack', str(boot), str(work / 'boot.img')], work).returncode:
             raise ValueError('Repack failed')
         new_boot = work / 'boot.img'
-        layout = boot_layout(new_boot.read_bytes())
+        repacked_data = new_boot.read_bytes()
+        repacked_blob = avb_blob(repacked_data)
+        report['repacked_vbmeta_blob'] = {'bytes': len(repacked_blob), 'sha256': digest(repacked_blob)}
+        report['signed_vbmeta_blob_unchanged'] = original_blob == repacked_blob
+        layout = boot_layout(repacked_data)
         report['repacked_boot_layout'] = layout
         old = report['reference_boot_layout']
         report['structural_roundtrip_passed'] = (layout['kernel_sha256'] == digest(image) and
@@ -199,7 +223,9 @@ def _assess(reference, candidate, tools, reports, report):
         info = run('repacked-boot-info', avb + ['info_image', '--image', str(new_boot)], work)
         run('repacked-boot-verify', avb + ['verify_image', '--image', str(new_boot)], work)
         report['signing_metadata_unchanged'] = signing_metadata(stock_info) == signing_metadata(info.stdout)
+        report['signing_metadata_comparison_scope'] = 'Selected avbtool text fields only; complete blob compared separately'
     report['offline_gate_passed'] = (report['structural_roundtrip_passed'] and report['signing_metadata_unchanged']
+        and report['signed_vbmeta_blob_unchanged']
         and all(v['returncode'] == 0 for v in report['checks'].values()))
     report['delivery_state'] = 'OFFLINE_CHECKS_ONLY' if report['offline_gate_passed'] else 'BLOCKED'
     return report

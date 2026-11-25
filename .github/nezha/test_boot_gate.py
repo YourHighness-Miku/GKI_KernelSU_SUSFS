@@ -10,7 +10,44 @@ import sys
 import tempfile
 import unittest
 
-from boot_gate import assess, boot_layout, decode_operation, digest, place, run_tool, signing_metadata
+from boot_gate import assess, avb_blob, boot_layout, decode_operation, digest, place, run_tool, signing_metadata
+
+
+class AVBBlobTests(unittest.TestCase):
+    def image(self, offset=4096):
+        data = bytearray(16384)
+        blob = bytearray(384)
+        blob[:4] = b'AVB0'
+        struct.pack_into('>IIQQ', blob, 4, 1, 0, 64, 64)
+        data[offset:offset + len(blob)] = blob
+        struct.pack_into('>4sIIQQQ28s', data, len(data) - 64,
+                         b'AVBf', 1, 0, offset, offset, len(blob), bytes(28))
+        return data
+
+    def test_blob_preservation_is_independent_of_moved_footer_offset(self):
+        self.assertEqual(avb_blob(self.image()), avb_blob(self.image(8192)))
+
+    def test_auth_or_descriptor_change_cannot_hide_behind_equal_text_fields(self):
+        original = self.image()
+        for relative in (256, 320):
+            changed = self.image()
+            changed[4096 + relative] ^= 1
+            self.assertNotEqual(avb_blob(original), avb_blob(changed))
+
+    def test_malformed_footer_or_blob_size_is_rejected(self):
+        for offset, fmt, value in ((0, '>4s', b'nope'), (4, '>I', 2),
+                                   (12, '>Q', 16000), (20, '>Q', 16300),
+                                   (28, '>Q', 2 * 1024**2 + 1)):
+            data = self.image()
+            struct.pack_into(fmt, data, len(data) - 64 + offset, value)
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                avb_blob(data)
+        for auth_size in (63, 128):
+            data = self.image()
+            struct.pack_into('>Q', data, 4096 + 12, auth_size)
+            with self.subTest(auth_size=auth_size), self.assertRaises(ValueError):
+                avb_blob(data)
+
 
 
 class PayloadTests(unittest.TestCase):
@@ -151,12 +188,23 @@ class OfficialAVBTests(unittest.TestCase):
             report = {'checks': {}}
             command = [sys.executable, str(tool), 'verify_image', '--image', str(boot)]
             self.assertEqual(run_tool('original', command, root, root, report).returncode, 0)
+            original_data = boot.read_bytes()
+            original_blob = avb_blob(original_data)
+            self.assertGreater(len(original_blob), 256)
             with boot.open('r+b') as image:
                 image.seek(4096)
                 byte = image.read(1)
                 image.seek(4096)
                 image.write(bytes([byte[0] ^ 1]))
             self.assertNotEqual(run_tool('modified', command, root, root, report).returncode, 0)
+            self.assertEqual(original_blob, avb_blob(boot.read_bytes()))
+            vbmeta_offset = struct.unpack_from('>Q', original_data, len(original_data) - 64 + 20)[0]
+            with boot.open('r+b') as image:
+                image.seek(vbmeta_offset + 256)
+                byte = image.read(1)
+                image.seek(vbmeta_offset + 256)
+                image.write(bytes([byte[0] ^ 1]))
+            self.assertNotEqual(original_blob, avb_blob(boot.read_bytes()))
 
 
 if __name__ == '__main__':
