@@ -72,8 +72,9 @@ jobs:
           PY
       - name: Test real inputs and template constraints without running the installer
         run: |
-          python3 -m unittest discover -s .github/nezha-package -p test_preflight.py -v
+          python3 -m unittest discover -s .github/nezha-package -p 'test_*.py' -v
           sh -n .github/nezha-package/anykernel.sh
+          sh -n .github/nezha-package/update-binary
           python3 .github/nezha-package/preflight.py --image "$NEZHA_PASSED_IMAGE" --assets "$NEZHA_AK3_ASSETS" --template .github/nezha-package/anykernel.sh --report reports/payload-preflight.json
       - name: Preserve reports only; never upload Image, installer or a flashable ZIP
         if: always()

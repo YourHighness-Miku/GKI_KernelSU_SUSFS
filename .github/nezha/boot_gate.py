@@ -212,6 +212,7 @@ def _assess(reference, candidate, tools, reports, report):
             raise ValueError('Repack failed')
         new_boot = work / 'boot.img'
         repacked_data = new_boot.read_bytes()
+        report['repacked_image_sha256'] = digest(repacked_data)
         repacked_blob = avb_blob(repacked_data)
         report['repacked_vbmeta_blob'] = {'bytes': len(repacked_blob), 'sha256': digest(repacked_blob)}
         report['signed_vbmeta_blob_unchanged'] = original_blob == repacked_blob

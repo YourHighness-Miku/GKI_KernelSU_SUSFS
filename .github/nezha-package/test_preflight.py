@@ -86,6 +86,64 @@ class PreflightTests(unittest.TestCase):
             result = subprocess.run(['sh', '-c', script, 'guard', value], capture_output=True, timeout=5)
             self.assertEqual(result.returncode == 0, expected, value)
 
+    def test_only_consistent_explicit_unlocked_values_are_accepted(self):
+        function = re.search(r'^unlocked_values_allowed\(\) \{\n.*?^\}', TEMPLATE.read_text(), re.M | re.S)
+        self.assertIsNotNone(function)
+        for values, expected in ((('0', 'unlocked', '0', 'unlocked'), True),
+                                 (('1', 'locked', '1', 'locked'), False),
+                                 (('0', 'unlocked', '1', 'locked'), False),
+                                 (('0', 'unlocked', '', ''), False),
+                                 (('0', 'orange', '0', 'unlocked'), False)):
+            run = subprocess.run(['sh', '-c', function[0] + '\nunlocked_values_allowed "$@"',
+                                  'guard', *values], capture_output=True, timeout=5)
+            self.assertEqual(run.returncode == 0, expected, values)
+
+    def test_real_boot_record_files_reject_duplicate_and_malformed_values(self):
+        function = re.search(r'^boot_record\(\) \{\n.*?^\}', TEMPLATE.read_text(), re.M | re.S)
+        self.assertIsNotNone(function)
+        cases = [('config', 'androidboot.flash.locked = "0"\n', True, b'0\n'),
+                 ('config', 'androidboot.flash.locked = "0"\nandroidboot.flash.locked = ""\n', False, b''),
+                 ('config', 'androidboot.flash.locked = "0" extra\n', False, b''),
+                 ('config', 'androidboot.flash.locked = ""\n', False, b''),
+                 ('cmdline', 'androidboot.flash.locked=\n', False, b''),
+                 ('cmdline', 'x=y androidboot.flash.locked=0\n', True, b'0\n'),
+                 ('cmdline', 'androidboot.flash.locked=0 androidboot.flash.locked=0\n', False, b'')]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'boot-record'
+            for kind, text, success, output in cases:
+                path.write_text(text)
+                run = subprocess.run(['sh', '-c', function[0] + '\nboot_record "$@"', 'guard',
+                                      str(path), 'androidboot.flash.locked', kind],
+                                     capture_output=True, timeout=5)
+                self.assertEqual(run.returncode == 0, success, text)
+                if success:
+                    self.assertEqual(run.stdout, output)
+
+    def test_kernel_partition_labels_are_exact_single_records(self):
+        function = re.search(r'^partition_label\(\) \{\n.*?^\}', TEMPLATE.read_text(), re.M | re.S)
+        self.assertIsNotNone(function)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'uevent'
+            for text, success in (('MAJOR=8\nPARTNAME=boot_a\n', True),
+                                  ('PARTNAME=boot_a\nPARTNAME=boot_b\n', False),
+                                  ('PARTNAME=boot_a=other\n', False), ('PARTNAME=\n', False)):
+                path.write_text(text)
+                run = subprocess.run(['sh', '-c', function[0] + '\npartition_label "$1"',
+                                      'guard', str(path)], capture_output=True, timeout=5)
+                self.assertEqual(run.returncode == 0, success, text)
+                if success:
+                    self.assertEqual(run.stdout, b'boot_a\n')
+
+    def test_active_slot_sources_must_agree(self):
+        function = re.search(r'^slots_agree\(\) \{\n.*?^\}', TEMPLATE.read_text(), re.M | re.S)
+        self.assertIsNotNone(function)
+        for values, expected in ((('_a', '_a', 'a'), True), (('_b', '_b', ''), True),
+                                 (('_a', '_b', 'b'), False), (('_a', '_a', 'b'), False),
+                                 (('', '_a', 'a'), False), (('a', 'a', 'a'), False)):
+            run = subprocess.run(['sh', '-c', function[0] + '\nslots_agree "$@"',
+                                  'guard', *values], capture_output=True, timeout=5)
+            self.assertEqual(run.returncode == 0, expected, values)
+
     def test_vendor_property_record_count_survives_shell_newline_trimming(self):
         function = re.search(r'^read_vendor_patch\(\) \{\n.*?^\}', TEMPLATE.read_text(), re.M | re.S)
         self.assertIsNotNone(function, 'Exact vendor property record count missing')
@@ -118,15 +176,50 @@ class RealPayloadTests(unittest.TestCase):
     def test_prepared_backend_never_archives_boot_or_recovery_logs(self):
         data = (Path(os.environ['NEZHA_AK3_ASSETS']) / 'META-INF/com/google/android/update-binary').read_bytes()
         result = preflight.prepare_backend(data)
-        self.assertIn(b'debugging() { :; }', result)
-        self.assertNotIn(b'tar -czf', result)
-        begin, end = data.index(b'debugging() {\n'), data.index(b'cleanup() {\n')
-        self.assertEqual(result, data[:begin] + b'debugging() { :; }\n' + data[end:])
-        self.assertIn(b'restore_env', result)
-        self.assertIn(b'do_devicecheck;', result)
+        self.assertEqual(result, TEMPLATE.with_name('update-binary').read_bytes())
+        for forbidden in (b'tar -czf', b'setup_env', b'mount_all', b'restore_env', b'setprop'):
+            self.assertNotIn(forbidden, result)
+        self.assertEqual(result.count(b'@PAYLOAD_PINS@'), 1)
+        self.assertEqual(result.count(b'@REPACKED_BOOT_SHA@'), 1)
+        self.assertIn(b'env -i AKHOME=', result)
         self.assertEqual(subprocess.run(['sh', '-n'], input=result, capture_output=True).returncode, 0)
         with self.assertRaises(ValueError):
             preflight.prepare_backend(data + b'\n')
+
+    def test_backend_rendering_requires_exact_payload_set_and_golden_digest(self):
+        assets = Path(os.environ['NEZHA_AK3_ASSETS'])
+        raw = (assets / 'META-INF/com/google/android/update-binary').read_bytes()
+        pins = {name: (size, digest) for name, (digest, size) in ASSETS.items()
+                if name != 'META-INF/com/google/android/update-binary'}
+        core = preflight.prepare_core((assets / 'tools/ak3-core.sh').read_bytes())
+        pins['tools/ak3-core.sh'] = (len(core), hashlib.sha256(core).hexdigest())
+        pins['Image'] = (44603904, IMAGE_SHA)
+        pins['anykernel.sh'] = (TEMPLATE.stat().st_size, TEMPLATE_SHA)
+        rendered = preflight.prepare_backend(raw, pins, 'a' * 64)
+        self.assertNotIn(b'@PAYLOAD_PINS@', rendered)
+        self.assertNotIn(b'@REPACKED_BOOT_SHA@', rendered)
+        self.assertIn(b"EXPECTED_REPACKED_SHA256='" + b'a' * 64 + b"'", rendered)
+        for digest in (None, '', 'g' * 64):
+            with self.assertRaises(ValueError):
+                preflight.prepare_backend(raw, pins, digest)
+        with self.assertRaises(ValueError):
+            preflight.prepare_backend(raw, dict(pins, unwanted=(1, 'b' * 64)), 'a' * 64)
+
+    def test_core_derivation_changes_only_writer_and_private_temp_path(self):
+        data = (Path(os.environ['NEZHA_AK3_ASSETS']) / 'tools/ak3-core.sh').read_bytes()
+        result = preflight.prepare_core(data)
+        begin = data.index(b'  blockdev --setrw $BLOCK 2>/dev/null;\n')
+        end = data.index(b'\n}\n\n# flash_generic')
+        restored_temp = result.replace(b'    tmpfile="$AKHOME/ak3decomp"\n',
+                                       b'    tmpfile="${target}_ak3decomp"\n')
+        self.assertEqual(restored_temp, data[:begin] +
+                         b'  nezha_write_verified || abort "Verified write failed.";\n' + data[end:])
+        flash = result.split(b'flash_boot() {', 1)[1].split(b'# flash_generic', 1)[0]
+        self.assertNotIn(b'dd if=/dev/zero', flash)
+        self.assertNotIn(b'blockdev --setrw', flash)
+        self.assertEqual(subprocess.run(['sh', '-n'], input=result, capture_output=True).returncode, 0)
+        with self.assertRaises(ValueError):
+            preflight.prepare_core(data + b'\n')
 
     def test_altered_template_rejected_with_real_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

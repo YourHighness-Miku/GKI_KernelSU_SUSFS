@@ -1,0 +1,180 @@
+#!/sbin/sh
+payload_names() {
+  printf '%s\n' Image anykernel.sh LICENSE tools/ak3-core.sh tools/busybox tools/magiskboot \
+    META-INF/com/google/android/updater-script
+}
+
+payload_pins() {
+  cat <<'NEZHA_PINS'
+@PAYLOAD_PINS@
+NEZHA_PINS
+}
+
+validate_pins() {
+  # Canonical positive decimal and lowercase hex only; no shell evaluation.
+  awk -F ' ' 'NF != 3 || $0 != $1 " " $2 " " $3 || $2 !~ /^[1-9][0-9]*$/ ||
+    length($2) > 8 || $2+0 > ($1 == "Image" ? 44603904 : 2097151) ||
+    length($3) != 64 || $3 !~ /^[0-9a-f]+$/ {exit 1}
+    {print $1} END {if (NR != 7) exit 1}' .check/pins > .check/names || return 1
+  payload_names > .check/expected && sort .check/expected > .check/want &&
+    sort .check/names > .check/got && cmp -s .check/want .check/got
+}
+
+zip_size() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || return 1
+  bytes=$(stat -c %s "$1") || return 1
+  case $bytes in ''|*[!0-9]*|?????????*) return 1 ;; esac
+  [ "$bytes" -ge 22 ] && [ "$bytes" -le 67108864 ]
+}
+
+# zipinfo renders names for display (e.g. embedded NUL is not lossless).
+# Also check the literal names in the small, single-disk ZIP32 directory.
+raw_inventory() {
+  tail -c 22 .check/input.zip > .check/end || return 1
+  octets=$(od -An -v -tu1 .check/end) || return 1
+  set -- $octets
+  [ "$#" = 22 ] && [ "$1 $2 $3 $4 $5 $6 $7 $8 $9 ${10} ${11} ${12}" = '80 75 5 6 0 0 0 0 8 0 8 0' ] || return 1
+  shift 12
+  [ "$9 ${10}" = '0 0' ] && [ "$4" = 0 ] && [ "$8" -lt 4 ] || return 1
+  span=$(($1 + 256*$2 + 65536*$3))
+  start=$(($5 + 256*$6 + 65536*$7 + 16777216*$8))
+  [ "$span" -le 65536 ] && [ $((start + span + 22)) -eq "$bytes" ] || return 1
+  od -An -v -tu1 -j "$start" -N "$span" .check/input.zip > .check/octets || return 1
+  awk '{for (i=1; i<=NF; ++i) b[n++]=$i}
+    END {p=0; while (p<n) {
+      if (++entries>8 || p+46>n || b[p]!=80 || b[p+1]!=75 || b[p+2]!=1 || b[p+3]!=2) exit 1
+      # DOS directory bit and (when present) Unix file type, even without a trailing /.
+      type=int(b[p+41]/16)
+      if (int(b[p+38]/16)%2 || (b[p+5]==3 && type!=0 && type!=8) || b[p+8]%2) exit 1
+      len=b[p+28]+256*b[p+29]; extra=b[p+30]+256*b[p+31]; comment=b[p+32]+256*b[p+33]
+      p+=46; if (len<1 || len>64 || p+len+extra+comment>n) exit 1
+      for (j=0; j<len; ++j) {v=b[p+j]; if (v<33 || v>126) exit 1; printf "%c", v}
+      print ""; p+=len+extra+comment
+    } if (entries!=8) exit 1}' .check/octets > .check/names &&
+    sort .check/names > .check/got && cmp -s .check/want .check/got
+}
+
+# Record the producer status as well as limiting what the consumer can write.
+bounded_unzip() {
+  limit=$1; dest=$2; shift 2
+  : > .check/status || return 1
+  (unzip "$@" 2>/dev/null; printf '%s\n' "$?" > .check/status) | head -c "$limit" > "$dest" || return 1
+  IFS= read -r rc < .check/status && [ "$rc" = 0 ]
+}
+
+verify_payload() {
+  mkdir .check && payload_pins > .check/pins && validate_pins || return 1
+  # A private bounded snapshot gives every unzip the very same input.
+  head -c 67108865 "$1" > .check/input.zip && zip_size .check/input.zip || return 1
+  printf '%s\n' META-INF/com/google/android/update-binary >> .check/expected &&
+    sort .check/expected > .check/want && raw_inventory || return 1
+  bounded_unzip 1025 .check/list -Z1 .check/input.zip &&
+    [ "$(stat -c %s .check/list)" -le 1024 ] && sort .check/list > .check/got &&
+    cmp -s .check/want .check/got || return 1
+  mkdir tools && mkdir -p META-INF/com/google/android || return 1
+  while IFS=' ' read -r name size digest; do
+    bounded_unzip "$((size + 1))" "$name" -p .check/input.zip "$name" &&
+      [ "$(stat -c %s "$name")" = "$size" ] || return 1
+    actual=$(sha256sum "$name") && [ "${actual%% *}" = "$digest" ] || return 1
+  done < .check/pins
+  rm -r .check
+}
+
+check_platform() {
+  [ "$(id -u)" = 0 ] && [ "$(uname -m)" = aarch64 ]
+}
+
+load_boot_pin() {
+  EXPECTED_REPACKED_SHA256='@REPACKED_BOOT_SHA@'
+  case $EXPECTED_REPACKED_SHA256 in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#EXPECTED_REPACKED_SHA256}" -eq 64 ]
+}
+
+remove_workdir() {
+  # Never remove a replacement directory or a merely inherited pathname.
+  if [ -n "$AKHOME" ] && [ ! -L "$AKHOME" ] && [ "$AKHOME" -ef . ]; then
+    rm -rf "$AKHOME"
+  fi
+}
+
+enter_workdir() {
+  AKHOME=''
+  trap 'rc=$?; trap - 0; trap "" HUP INT TERM; remove_workdir; exit "$rc"' 0
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+  newdir=$(mktemp -d "$1/nezha.XXXXXXXX") || return 1
+  case $newdir in "$1"/nezha.????????) ;; *) return 1 ;; esac
+  [ ! -L "$newdir" ] && cd "$newdir" && [ "$newdir" -ef . ] && [ "$(stat -c %a .)" = 700 ] &&
+    [ "$(stat -c %u .)" = "$(id -u)" ] || return 1
+  AKHOME=$newdir
+  TMPDIR=$AKHOME; export TMPDIR
+}
+
+request_cancel() {
+  # Latch the first cancellation; later signals must not interrupt the gate or reap.
+  trap '' HUP INT TERM
+  [ "$cancel_status" -ne 0 ] || cancel_status=$1
+  mkdir "$AKHOME/write-gate" 2>/dev/null || :
+  printf '' > "$AKHOME/cancel-requested" || :
+}
+
+run_owned() {
+  cancel_status=0
+  trap 'request_cancel 129' HUP; trap 'request_cancel 130' INT; trap 'request_cancel 143' TERM
+  [ "$cancel_status" -eq 0 ] || return "$cancel_status"
+  "$@" &
+  owned_pid=$!
+  wait "$owned_pid"
+  child_status=$?
+  trap '' HUP INT TERM
+  if [ "$cancel_status" -ne 0 ]; then
+    # A trapped wait can return before exit. If already reaped, ignore that status.
+    wait "$owned_pid" 2>/dev/null || :
+    return "$cancel_status"
+  fi
+  return "$child_status"
+}
+
+main() {
+  set -f
+  umask 077
+  [ "$#" -eq 3 ] || return 1
+  OUTFD=$2; ZIPFILE=$3
+  case $OUTFD in ''|*[!0-9]*) return 1 ;; esac
+  case $ZIPFILE in /*) ;; *) ZIPFILE=$PWD/$ZIPFILE ;; esac
+  check_platform && load_boot_pin || return 1
+  for util in awk cat chmod cmp env head mkdir mktemp od rm sha256sum sort stat tail unzip; do
+    command -v "$util" >/dev/null || return 1
+  done
+  zip_size "$ZIPFILE" || return 1
+  parent=/tmp
+  [ -d "$parent" ] || parent=/data/local/tmp
+  [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
+  enter_workdir "$parent" || return 1
+  verify_payload "$ZIPFILE" || return 1
+  chmod 700 tools/busybox tools/magiskboot && mkdir bin &&
+    "$AKHOME/tools/busybox" --install -s "$AKHOME/bin" || return 1
+  run_owned env -i AKHOME="$AKHOME" OUTFD="$OUTFD" PATH="$AKHOME/tools:$AKHOME/bin:/system/bin:/sbin" \
+    EXPECTED_REPACKED_SHA256="$EXPECTED_REPACKED_SHA256" ANDROID_ROOT=/system "$AKHOME/tools/busybox" ash anykernel.sh
+}
+
+# entrypoint
+PATH=/system/bin:/sbin
+export PATH
+unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_PROFILE LD_PROFILE_OUTPUT
+unset LD_TRACE_LOADED_OBJECTS LD_CONFIG_FILE ENV BASH_ENV CDPATH GLOBIGNORE AKHOME TMPDIR
+umask 077
+set -f
+# A pathname ending in / cannot name the executed regular file. Use it as
+# the clean shell's $0 when re-reading this trusted entry, not an env flag.
+if [ "$0" = 'nezha-clean/' ]; then
+  main "$@"
+  exit $?
+fi
+case $0 in /*) entry=$0 ;; *) entry=./$0 ;; esac
+for cleanenv in /system/bin/env /sbin/env; do
+  [ -x "$cleanenv" ] || continue
+  exec "$cleanenv" -i PATH="$PATH" LC_ALL=C /sbin/sh -c '
+    entry=$1; shift; . "$entry"
+  ' nezha-clean/ "$entry" "$@"
+done
+exit 1

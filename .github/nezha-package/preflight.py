@@ -9,7 +9,7 @@ import stat
 import struct
 
 AK3_COMMIT = 'e1e9dce98430c5c6f231f7094a8c7f4ecaf50948'
-TEMPLATE_SHA = '74aedf1e09955d34754f2f6ef4f8d6f60c2ec1af44cde8229345aba9f1be29e3'
+TEMPLATE_SHA = 'f746bd4a62bcfd85ead7801da73b33d237fa0f3c38e9f74675e65dac4d62aa46'
 IMAGE_SHA = '278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c'
 ASSETS = {
     'LICENSE': ('df6f65da47d459fdf2a2ef0eadb34f37d838befc91352b64a84f35507bea95cd', 11630),
@@ -32,15 +32,44 @@ def require(condition, reason):
         raise ValueError(reason)
 
 
-def prepare_backend(data):
+def prepare_core(data):
+    expected, length = ASSETS['tools/ak3-core.sh']
+    require(len(data) == length and hashlib.sha256(data).hexdigest() == expected, 'Unreviewed AK3 core')
+    start = b'  blockdev --setrw $BLOCK 2>/dev/null;\n'
+    stop = b'\n}\n\n# flash_generic'
+    require(data.count(start) == 1 and data.count(stop) == 1, 'Ambiguous core write boundary')
+    begin, end = data.index(start), data.index(stop)
+    require(begin < end, 'Unexpected core write order')
+    result = data[:begin] + b'  nezha_write_verified || abort "Verified write failed.";\n' + data[end:]
+    old = b'    tmpfile="${target}_ak3decomp"\n'
+    require(result.count(old) == 1, 'Ambiguous version extraction temporary path')
+    return result.replace(old, b'    tmpfile="$AKHOME/ak3decomp"\n')
+
+
+def prepare_backend(data, pins=None, repacked_sha=None):
     expected, length = ASSETS['META-INF/com/google/android/update-binary']
     require(len(data) == length and hashlib.sha256(data).hexdigest() == expected,
             'Unreviewed AK3 backend')
-    require(data.count(b'debugging() {\n') == data.count(b'cleanup() {\n') == 1,
-            'Ambiguous debug archive function')
-    begin, end = data.index(b'debugging() {\n'), data.index(b'cleanup() {\n')
-    require(begin < end, 'Unexpected backend function order')
-    return data[:begin] + b'debugging() { :; }\n' + data[end:]
+    source = read_regular(Path(__file__).with_name('update-binary'), 16384)
+    require(hashlib.sha256(source).hexdigest() ==
+            '3ab938732a1951d30f0212e9ac80e2fa78cea76d9ce440b6cbd37d970fae03f6',
+            'Unreviewed restricted bootstrap')
+    require(source.count(b'@PAYLOAD_PINS@') == source.count(b'@REPACKED_BOOT_SHA@') == 1,
+            'Ambiguous restricted bootstrap parameters')
+    if pins is None and repacked_sha is None:
+        return source
+    require(pins is not None and re.fullmatch(r'[0-9a-f]{64}', repacked_sha or ''),
+            'Missing accepted offline transformation identity')
+    require(set(pins) == (set(ASSETS) - {'META-INF/com/google/android/update-binary'}) | {'Image', 'anykernel.sh'},
+            'Unexpected bootstrap payload set')
+    rows = []
+    for name in sorted(pins):
+        size, digest = pins[name]
+        require(isinstance(size, int) and 0 < size <= (44603904 if name == 'Image' else 2097151)
+                and re.fullmatch(r'[0-9a-f]{64}', digest), 'Invalid bootstrap payload identity')
+        rows.append(f'{name} {size} {digest}')
+    return source.replace(b'@PAYLOAD_PINS@', '\n'.join(rows).encode()).replace(
+        b'@REPACKED_BOOT_SHA@', repacked_sha.encode())
 
 
 def read_regular(path, limit):
@@ -108,13 +137,20 @@ def assess(image, assets, template):
         data = read_regular(assets / name, 3 * 1024**2)
         require(len(data) == length and hashlib.sha256(data).hexdigest() == expected, 'Fixed AK3 asset mismatch: ' + name)
         observed[name] = {'bytes': length, 'sha256': expected}
-        output = prepare_backend(data) if name == 'META-INF/com/google/android/update-binary' else data
+        if name == 'META-INF/com/google/android/update-binary':
+            output = prepare_backend(data)
+        elif name == 'tools/ak3-core.sh':
+            output = prepare_core(data)
+        else:
+            output = data
         prepared[name] = {'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
     return {
         'status': 'PAYLOAD_PREFLIGHT_ONLY', 'source_run': 45524716598, 'image_sha256': IMAGE_SHA,
         'image_file_bytes': len(image_data), 'arm64': arm64_header(image_data),
         'ak3_commit': AK3_COMMIT, 'template_sha256': TEMPLATE_SHA, 'fixed_assets': observed, 'prepared_assets': prepared, 'template_policy': policy,
-        'debug_archive_export_disabled': True,
+        'debug_archive_export_disabled': True, 'generic_mount_backend_removed': True,
+        'bootstrap_rendered_for_install': False, 'golden_repacked_identity_required': True,
+        'core_writer_replaced_with_guarded_single_write': True,
         'prospective_archive_allowlist': sorted([*ASSETS, 'Image', 'anykernel.sh']),
         'installer_executed': False, 'flashable_archive_created': False, 'release_authorized': False,
         'remaining': ['Original signed boot-content descriptor mismatch', 'Actual runtime provider and device boot unproven'],
