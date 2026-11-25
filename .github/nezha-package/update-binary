@@ -81,6 +81,17 @@ check_platform() {
   [ "$(id -u)" = 0 ] && [ "$(uname -m)" = aarch64 ]
 }
 
+select_entry_shell() {
+  local candidate
+  for candidate in "$@"; do
+    if [ -x "$candidate" ] && [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 load_boot_pin() {
   EXPECTED_REPACKED_SHA256='@REPACKED_BOOT_SHA@'
   case $EXPECTED_REPACKED_SHA256 in ''|*[!0-9a-f]*) return 1 ;; esac
@@ -168,9 +179,10 @@ if [ "$0" = 'nezha-clean/' ]; then
   exit $?
 fi
 case $0 in /*) entry=$0 ;; *) entry=./$0 ;; esac
+entryshell=$(select_entry_shell /system/bin/sh /sbin/sh) || exit 1
 for cleanenv in /system/bin/env /sbin/env; do
   [ -x "$cleanenv" ] || continue
-  exec "$cleanenv" -i PATH="$PATH" LC_ALL=C /sbin/sh -c '
+  exec "$cleanenv" -i PATH="$PATH" LC_ALL=C "$entryshell" -c '
     entry=$1; shift; . "$entry"
   ' nezha-clean/ "$entry" "$@"
 done

@@ -54,8 +54,8 @@ class TestArm64Tools(unittest.TestCase):
         self.assertEqual(result.returncode, status, (app, result.stderr))
         return result.stdout
 
-    def helper(self, name):
-        definitions = (PACKAGE / 'anykernel.sh').read_text().split('\n# entrypoint\n', 1)[0]
+    def helper(self, name, source='anykernel.sh'):
+        definitions = (PACKAGE / source).read_text().split('\n# entrypoint\n', 1)[0]
         matches = re.findall(rf'^{name}\(\) \{{\n.*?^\}}$', definitions, re.M | re.S)
         self.assertEqual(len(matches), 1, name)
         return matches[0]
@@ -111,6 +111,19 @@ class TestArm64Tools(unittest.TestCase):
             with self.subTest(name=name, args=args):
                 body = self.helper(name) + f'\n{name} "$@"'
                 self.run_bb('ash', '-c', body, 'test', *args, status=status)
+
+    def test_normal_and_recovery_shell_selection(self):
+        normal = self.work / 'normal-sh'
+        recovery = self.work / 'recovery-sh'
+        for path in (normal, recovery):
+            path.write_text('never executed')
+            path.chmod(0o500)
+        body = self.helper('select_entry_shell', 'update-binary') + '\nselect_entry_shell "$@"'
+        self.assertEqual(self.run_bb('ash', '-c', body, 'test', normal, recovery), os.fsencode(normal) + b'\n')
+        normal.chmod(0o400)
+        self.assertEqual(self.run_bb('ash', '-c', body, 'test', normal, recovery), os.fsencode(recovery) + b'\n')
+        recovery.unlink()
+        self.run_bb('ash', '-c', body, 'test', normal, recovery, status=1)
 
     def test_regular_file_copy_hash_and_count(self):
         data = bytes(range(256)) * 4096 + b'partial final block'

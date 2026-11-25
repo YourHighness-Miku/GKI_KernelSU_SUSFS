@@ -52,7 +52,7 @@ def prepare_backend(data, pins=None, repacked_sha=None):
             'Unreviewed AK3 backend')
     source = read_regular(Path(__file__).with_name('update-binary'), 16384)
     require(hashlib.sha256(source).hexdigest() ==
-            '9fbb39c8bec7e2d2a02b866cb6d2249ec3aa8b2375b8f1b7747440e86fa2e8fc',
+            '2cbb80ec8ad230a5f219d218fc0e1d3a0b4492b3e3d638890522a0f470240b6f',
             'Unreviewed restricted bootstrap')
     require(source.count(b'@PAYLOAD_PINS@') == source.count(b'@REPACKED_BOOT_SHA@') == 1,
             'Ambiguous restricted bootstrap parameters')

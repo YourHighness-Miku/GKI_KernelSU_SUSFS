@@ -61,6 +61,22 @@ class TestBackend(unittest.TestCase):
             self.assertEqual(file.read_bytes(), FILES[name])
             self.assertFalse(file.is_symlink() or os.access(file, os.X_OK))
 
+    def test_reentry_shell_selection_uses_available_regular_executables(self):
+        normal = self.root / 'normal-sh'
+        recovery = self.root / 'recovery-sh'
+        for path in (normal, recovery):
+            path.write_text('not executed')
+            path.chmod(0o700)
+        body = 'select_entry_shell "$1/normal-sh" "$1/recovery-sh"'
+        run = self.run_helper(body.replace('$1', str(self.root)))
+        self.assertEqual(run.returncode, 0)
+        self.assertEqual(run.stdout, str(normal).encode() + b'\n')
+        normal.chmod(0o600)
+        run = self.run_helper(body.replace('$1', str(self.root)))
+        self.assertEqual(run.stdout, str(recovery).encode() + b'\n')
+        recovery.unlink()
+        self.assertNotEqual(self.run_helper(body.replace('$1', str(self.root))).returncode, 0)
+
     def test_bad_inventory_refused_before_payload_paths(self):
         for label, entries in {
             'duplicate': [('Image', b'duplicate'), *self.entries[1:]],
