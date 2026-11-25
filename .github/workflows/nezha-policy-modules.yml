@@ -53,10 +53,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y erofs-utils
           dpkg-query -W erofs-utils > reports/filesystem-tool-version.txt
-          printf '%s\n' 'capstone==5.0.6 --hash=sha256:0358855773100bb91ae6681fabce7299df83156945ba943f6211061a592c54a6' > "$RUNNER_TEMP/audit-requirements.txt"
+          printf '%s\n' 'capstone==5.0.6 --hash=sha256:0358855773100bb91ae6681fabce7299df83156945ba943f6211061a592c54a6' 'lz4==4.4.5 --hash=sha256:24092635f47538b392c4eaeff14c7270d2c8e806bf4be2a6446a378591c5e69e' > "$RUNNER_TEMP/audit-requirements.txt"
           python3 -m pip install --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple -r "$RUNNER_TEMP/audit-requirements.txt"
       - name: Fetch only the same public OTA ABL and module partitions
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: python3 .github/nezha-audit/public_audit_refs.py public-audit-reference reports/public-reference.json
       - name: Test real ABL decoding and retain conditional static policy evidence
         env:
@@ -64,14 +64,20 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/nezha-audit -p test_abl_policy.py -v
           python3 .github/nezha-audit/abl_policy.py "$ABL_REFERENCE" reports/abl-policy.json
-      - name: Test module inventory parsing without loading or executing modules
-        run: python3 -m unittest discover -s .github/nezha-audit -p test_module_inventory.py -v
+      - name: Test archive and inventory parsing without loading or executing modules
+        run: |
+          python3 -m unittest discover -s .github/nezha-audit -p test_module_inventory.py -v
+          python3 -m unittest discover -s .github/nezha-audit -p test_vendor_ramdisk.py -v
+          python3 -m unittest discover -s .github/nezha-audit -p test_module_metadata.py -v
       - name: Extract only verified public filesystems without mounting
         run: |
           fsck.erofs --extract=system-modules public-audit-reference/system_dlkm.img > reports/system-erofs.txt 2>&1
           fsck.erofs --extract=vendor-modules public-audit-reference/vendor_dlkm.img > reports/vendor-erofs.txt 2>&1
+          python3 .github/nezha-audit/vendor_ramdisk.py public-audit-reference/vendor_boot.img ramdisk-modules reports/vendor-ramdisk.json
+      - name: Preserve original load and dependency declarations without executing them
+        run: python3 .github/nezha-audit/module_metadata.py --root system-modules --root vendor-modules --root ramdisk-modules --report reports/module-load-metadata.json
       - name: Audit every observed original module against exact candidate exports
-        run: python3 .github/nezha-audit/module_inventory.py --symvers source-reports/Module.symvers --module-root system-modules --module-root vendor-modules --report reports/module-audit.json
+        run: python3 .github/nezha-audit/module_inventory.py --symvers source-reports/Module.symvers --module-root system-modules --module-root vendor-modules --module-root ramdisk-modules --report reports/module-audit.json
       - name: Preserve evidence only; never upload a bootloader, module image or flashable archive
         if: always()
         uses: actions/upload-artifact@v4
