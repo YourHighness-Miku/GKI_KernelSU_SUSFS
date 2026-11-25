@@ -1,0 +1,85 @@
+name: Nezha exact payload preflight
+run-name: Nezha fixed AK3 payload policy — reports only, no build or ZIP
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/nezha-package/**
+      - .github/workflows/nezha-package-preflight.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nezha-payload-preflight
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SOURCE_RUN: '45524716598'
+      SOURCE_SHA: 4c7d5e68abe115d3411dce40fb004912c17f3253
+      NEZHA_PASSED_IMAGE: candidate/Image
+      NEZHA_AK3_ASSETS: pinned-ak3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require the exact prior combined success and download without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir reports
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > source-run.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path('source-run.json').read_text())
+          expected = {'id': int(os.environ['SOURCE_RUN']), 'head_sha': os.environ['SOURCE_SHA'],
+                      'head_branch': 'fix/nezha-r74-binder-baseline',
+                      'path': '.github/workflows/nezha-baseline.yml',
+                      'status': 'completed', 'conclusion': 'success'}
+          if any(run.get(k) != v for k, v in expected.items()):
+              raise SystemExit('Source is not the exact previously passed candidate')
+          Path('reports/source-identity.json').write_text(json.dumps(expected, indent=2) + '\n')
+          PY
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "nezha-r74-combined-kernel-$SOURCE_RUN" --dir candidate
+      - name: Retrieve only hash-pinned public AK3 source assets without executing them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, sys
+          from pathlib import Path
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+          sys.path.insert(0, '.github/nezha-package')
+          from preflight import AK3_COMMIT, ASSETS
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = build_opener(NoRedirect())
+          for name, (expected, size) in ASSETS.items():
+              url = f'https://api.github.com/repos/WildKernels/AnyKernel3/contents/{name}?ref={AK3_COMMIT}'
+              request = Request(url, headers={'Accept': 'application/vnd.github.raw+json',
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'X-GitHub-Api-Version': '2022-11-28'})
+              with opener.open(request, timeout=30) as response:
+                  data = response.read(3 * 1024**2 + 1)
+              if len(data) != size or hashlib.sha256(data).hexdigest() != expected:
+                  raise SystemExit('Fixed asset identity mismatch: ' + name)
+              path = Path(os.environ['NEZHA_AK3_ASSETS']) / name
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(data)
+          PY
+      - name: Test real inputs and template constraints without running the installer
+        run: |
+          python3 -m unittest discover -s .github/nezha-package -p test_preflight.py -v
+          sh -n .github/nezha-package/anykernel.sh
+          python3 .github/nezha-package/preflight.py --image "$NEZHA_PASSED_IMAGE" --assets "$NEZHA_AK3_ASSETS" --template .github/nezha-package/anykernel.sh --report reports/payload-preflight.json
+      - name: Preserve reports only; never upload Image, installer or a flashable ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-payload-preflight-${{ github.run_id }}
+          path: reports/*.json
+          if-no-files-found: error
+          retention-days: 7
