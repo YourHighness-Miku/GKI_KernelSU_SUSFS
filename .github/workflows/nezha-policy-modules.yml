@@ -1,0 +1,82 @@
+name: Nezha same-build ABL and module evidence
+run-name: Nezha original bootloader policy and OEM module audit — read-only reports
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/workflows/nezha-policy-modules.yml
+      - .github/nezha-audit/**
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nezha-public-policy-module-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      SOURCE_RUN: '45524716598'
+      SOURCE_SHA: 4c7d5e68abe115d3411dce40fb004912c17f3253
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Bind to the already passed combined source and exact export bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir reports
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > reports/source-run.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path('reports/source-run.json').read_text())
+          assert run['head_sha'] == os.environ['SOURCE_SHA']
+          assert run['head_branch'] == 'fix/nezha-r74-binder-baseline'
+          assert run['path'] == '.github/workflows/nezha-baseline.yml'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          PY
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "nezha-r74-combined-$SOURCE_RUN" --dir source-reports
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('source-reports')
+          expected = '3c4cec4c93217ba5ba406fbf771447d57ad953b440c31a9dfd4cb9c8b8f129ea'
+          assert hashlib.sha256((root / 'Module.symvers').read_bytes()).hexdigest() == expected
+          assert hashlib.sha256((root / 'built.config').read_bytes()).hexdigest() == '873bf01fd07c3c85f9a02db7a175e917a268d9e28c91f05dd65ca3d32f9e519b'
+          Path('reports/candidate-export-identity.json').write_text(json.dumps({'source_run': 45524716598, 'symvers_sha256': expected, 'candidate_image_sha256': '278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c'}, indent=2) + '\n')
+          PY
+      - name: Prepare fixed static analysis and filesystem tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y erofs-utils
+          dpkg-query -W erofs-utils > reports/filesystem-tool-version.txt
+          printf '%s\n' 'capstone==5.0.6 --hash=sha256:0358855773100bb91ae6681fabce7299df83156945ba943f6211061a592c54a6' > "$RUNNER_TEMP/audit-requirements.txt"
+          python3 -m pip install --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple -r "$RUNNER_TEMP/audit-requirements.txt"
+      - name: Fetch only the same public OTA ABL and module partitions
+        timeout-minutes: 30
+        run: python3 .github/nezha-audit/public_audit_refs.py public-audit-reference reports/public-reference.json
+      - name: Test real ABL decoding and retain conditional static policy evidence
+        env:
+          ABL_REFERENCE: public-audit-reference/abl.img
+        run: |
+          python3 -m unittest discover -s .github/nezha-audit -p test_abl_policy.py -v
+          python3 .github/nezha-audit/abl_policy.py "$ABL_REFERENCE" reports/abl-policy.json
+      - name: Test module inventory parsing without loading or executing modules
+        run: python3 -m unittest discover -s .github/nezha-audit -p test_module_inventory.py -v
+      - name: Extract only verified public filesystems without mounting
+        run: |
+          fsck.erofs --extract=system-modules public-audit-reference/system_dlkm.img > reports/system-erofs.txt 2>&1
+          fsck.erofs --extract=vendor-modules public-audit-reference/vendor_dlkm.img > reports/vendor-erofs.txt 2>&1
+      - name: Audit every observed original module against exact candidate exports
+        run: python3 .github/nezha-audit/module_inventory.py --symvers source-reports/Module.symvers --module-root system-modules --module-root vendor-modules --report reports/module-audit.json
+      - name: Preserve evidence only; never upload a bootloader, module image or flashable archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-policy-modules-${{ github.run_id }}
+          path: reports/
+          retention-days: 7
+          if-no-files-found: error
