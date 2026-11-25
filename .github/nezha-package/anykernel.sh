@@ -36,6 +36,14 @@ slots_agree() {
   case "$1" in _a|_b) ;; *) return 1 ;; esac
   [ "$1" = "$2" ] && { [ -z "$3" ] || [ "$3" = "${1#_}" ]; }
 }
+requested_slot_allowed() {
+  case "$2" in _a|_b) ;; *) return 1 ;; esac
+  case "$1" in '') return 0 ;; _a|_b) [ "$1" = "$2" ] ;; *) return 1 ;; esac
+}
+installer_stop() {
+  printf 'ui_print Nezha[%s]: %s\n' "$1" "$2" >&2
+  exit 1
+}
 boot_record() {
   case "$3" in
     config)
@@ -82,6 +90,7 @@ current_slot() {
   letter=$(boot_value androidboot.slot) || return 1
   [ -n "$proc" ] || { case "$letter" in a|b) proc="_$letter" ;; *) return 1 ;; esac; }
   slots_agree "$prop" "$proc" "$letter" || return 1
+  requested_slot_allowed "${REQUESTED_SLOT:-}" "$proc" || return 1
   prop_letter=$("$PROP_TOOL" ro.boot.slot) || return 1
   [ -z "$prop_letter" ] || [ "$prop_letter" = "${prop#_}" ] || return 1
   printf '%s' "$prop"
@@ -174,19 +183,21 @@ cancel_before_commit() {
 set -o pipefail || exit 1
 unset magisk_patched customdd CUSTOMDD BLOCK SLOT IS_SLOT_DEVICE SLOT_SELECT RAMDISK_COMPRESSION PATCH_VBMETA_FLAG
 unset KEEPVERITY KEEPFORCEENCRYPT RECOVERYMODE PREINITDEVICE LD_PRELOAD LD_LIBRARY_PATH LD_CONFIG_FILE
-case "$EXPECTED_REPACKED_SHA256" in ''|*[!0-9a-f]*) exit 1 ;; esac
-[ "${#EXPECTED_REPACKED_SHA256}" = 64 ] || exit 1
-[ -n "$AKHOME" ] && [ -d "$AKHOME" ] || exit 1
+case "$EXPECTED_REPACKED_SHA256" in ''|*[!0-9a-f]*) installer_stop E_GOLDEN 'Invalid accepted output identity.' ;; esac
+[ "${#EXPECTED_REPACKED_SHA256}" = 64 ] || installer_stop E_GOLDEN 'Invalid accepted output identity.'
+case "${REQUESTED_SLOT:-}" in ''|_a|_b) ;; *) installer_stop E_SLOT_ARG 'Invalid requested slot.' ;; esac
+REQUESTED_SLOT=${REQUESTED_SLOT:-}
+[ -n "$AKHOME" ] && [ -d "$AKHOME" ] || installer_stop E_WORK 'Private workspace missing.'
 trap cancel_before_commit HUP INT TERM
 PROP_TOOL=/system/bin/getprop
 [ -x "$PROP_TOOL" ] || PROP_TOOL=/sbin/getprop
-[ -x "$PROP_TOOL" ] || exit 1
-vendor_patch=$(read_vendor_patch /vendor/build.prop) || exit 1
-vendor_patch_allowed "$vendor_patch" || exit 1
-FROZEN_SLOT=$(current_slot) || exit 1
-FROZEN_IDENTITIES=$(reference_identities) || exit 1
-FROZEN_BOOT=$(partition_node boot) || exit 1
-readonly FROZEN_SLOT FROZEN_IDENTITIES FROZEN_BOOT PROP_TOOL EXPECTED_REPACKED_SHA256 AKHOME
+[ -x "$PROP_TOOL" ] || installer_stop E_PROPERTY 'Trusted property tool unavailable.'
+vendor_patch=$(read_vendor_patch /vendor/build.prop) || installer_stop E_VENDOR 'Cannot read one vendor patch record.'
+vendor_patch_allowed "$vendor_patch" || installer_stop E_VENDOR 'Vendor patch differs from the supported OTA.'
+FROZEN_SLOT=$(current_slot) || installer_stop E_BOOT_STATE 'Device, unlock state or requested/actual slot conflicts.'
+FROZEN_IDENTITIES=$(reference_identities) || installer_stop E_REFERENCE 'Pinned partition identity, capacity or ownership differs.'
+FROZEN_BOOT=$(partition_node boot) || installer_stop E_TARGET 'Cannot identify the active boot partition.'
+readonly FROZEN_SLOT FROZEN_IDENTITIES FROZEN_BOOT PROP_TOOL EXPECTED_REPACKED_SHA256 AKHOME REQUESTED_SLOT
 getprop() { "$PROP_TOOL" "$@"; }
 expected_image=278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c
 actual_image=$(sha256sum "$AKHOME/Image") || exit 1

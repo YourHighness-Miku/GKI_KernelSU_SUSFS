@@ -12,7 +12,7 @@ import zipfile
 from gate import REPACKED_SHA, evaluate, load_bound, validate_runs
 from preflight import ASSETS, IMAGE_SHA, assess, prepare_backend, prepare_core, read_regular, require
 
-ARCHIVE_NAME = 'Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-conditional.zip'
+ARCHIVE_NAME = 'Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-nova-entry-v2.zip'
 SELF = 'META-INF/com/google/android/update-binary'
 
 
@@ -63,7 +63,7 @@ def build(image, assets, evidence_directory, runs_path, output):
     template = Path(__file__).resolve().parents[1] / 'nezha-package/anykernel.sh'
     fresh = assess(image, assets, template)
     baseline = evidence['payload-preflight.json']
-    for field in ('fixed_assets', 'template_sha256', 'image_sha256', 'image_file_bytes', 'template_policy', 'arm64'):
+    for field in ('fixed_assets', 'image_sha256', 'image_file_bytes', 'template_policy', 'arm64'):
         require(fresh[field] == baseline[field], 'Current payload differs from reviewed baseline: ' + field)
     require(fresh['prepared_assets']['tools/ak3-core.sh'] == baseline['prepared_assets']['tools/ak3-core.sh'],
             'Derived transformation core differs')

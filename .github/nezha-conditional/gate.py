@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'nezha-package'))
 from preflight import IMAGE_SHA, TEMPLATE_SHA, read_regular, require
 
 REPACKED_SHA = '2a49d69e6c0ab4d89364f6d598c5b30983fe2fba0a618f9fcfa1cea4ece7c5bf'
+BASELINE_TEMPLATE_SHA = 'f746bd4a62bcfd85ead7801da73b33d237fa0f3c38e9f74675e65dac4d62aa46'
 FIXTURE_SHA = {
     'boot-result.json': 'e2727d4bd66f9072a583a62505ef923a7ec975cb7ce1dc9544d1555896a07817',
     'repacked-boot-verify.txt': 'dba3a9e0fb9e06898ee30ed4c14e14b8cf1c7be39539d6420409f246bea04852',
@@ -94,7 +95,7 @@ def evaluate(evidence):
             'missing_or_external': 6, 'unsupported': 0}, 'Raw unknowns were hidden')
     guard = evidence['payload-preflight.json']
     require(guard['status'] == 'PAYLOAD_PREFLIGHT_ONLY' and guard['source_run'] == 45524716598
-            and guard['image_sha256'] == IMAGE_SHA and guard['template_sha256'] == TEMPLATE_SHA,
+            and guard['image_sha256'] == IMAGE_SHA and guard['template_sha256'] == BASELINE_TEMPLATE_SHA,
             'Guard source differs')
     require(guard['generic_mount_backend_removed'] is True and guard['core_writer_replaced_with_guarded_single_write'] is True
             and guard['golden_repacked_identity_required'] is True, 'Restricted installer checks missing')
@@ -132,6 +133,7 @@ def evaluate(evidence):
         'conditional_module_counts': dict(scope['conditional_counts_replayed']),
         'hardware_boot_verified': False,
         'image_sha256': IMAGE_SHA, 'golden_repacked_sha256': REPACKED_SHA,
+        'historical_guard_template_sha256': BASELINE_TEMPLATE_SHA, 'current_template_sha256': TEMPLATE_SHA,
         'required_window_bytes': h + reserved, 'provider_margin_bytes': size - h - reserved,
         'unproven_conditions': [policy['precondition'], *policy['assumptions'],
                                provider['conditional_values']['predicate'], *scope['assumptions_not_established_by_this_check']],

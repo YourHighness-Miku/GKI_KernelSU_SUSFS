@@ -9,7 +9,7 @@ import stat
 import struct
 
 AK3_COMMIT = 'e1e9dce98430c5c6f231f7094a8c7f4ecaf50948'
-TEMPLATE_SHA = 'f746bd4a62bcfd85ead7801da73b33d237fa0f3c38e9f74675e65dac4d62aa46'
+TEMPLATE_SHA = '1708bf3526f9f755f9e1e19b6cdf976bdfbe073eb360802fea9a3cb32aa8a8c7'
 IMAGE_SHA = '278e05748f16841f4cc86cd33954e065acef0e34038a949385dd196c1219a47c'
 ASSETS = {
     'LICENSE': ('df6f65da47d459fdf2a2ef0eadb34f37d838befc91352b64a84f35507bea95cd', 11630),
@@ -52,7 +52,7 @@ def prepare_backend(data, pins=None, repacked_sha=None):
             'Unreviewed AK3 backend')
     source = read_regular(Path(__file__).with_name('update-binary'), 16384)
     require(hashlib.sha256(source).hexdigest() ==
-            '2cbb80ec8ad230a5f219d218fc0e1d3a0b4492b3e3d638890522a0f470240b6f',
+            '70404b9848e2c4d0370f466ffa94a62de046237ce2e0f71781119ef3e80f34b4',
             'Unreviewed restricted bootstrap')
     require(source.count(b'@PAYLOAD_PINS@') == source.count(b'@REPACKED_BOOT_SHA@') == 1,
             'Ambiguous restricted bootstrap parameters')
@@ -109,7 +109,9 @@ def template_policy(text):
     prefix = text.split(anchor)[0]
     for name in ('PATCHVBMETAFLAG', 'NO_VBMETA_PARTITION_PATCH', 'patch_vbmeta_flag', 'slot_select'):
         require(re.search(r'^(?:export\s+)?' + name + '=', prefix, re.M), 'Setting applied after core import')
-    require('vendor_patch_allowed "$vendor_patch" || exit 1' in prefix, 'Missing strict vendor patch guard')
+    require('vendor_patch_allowed "$vendor_patch" || installer_stop E_VENDOR' in prefix
+            and re.search(r'^installer_stop\(\) \{\n[^}]*\n  exit 1\n\}', prefix, re.M),
+            'Missing strict vendor patch guard')
     require('sha256sum "$AKHOME/Image"' in prefix and '[ "$actual_image" = "$expected_image" ] || exit 1' in prefix,
             'Missing pre-import payload integrity check')
     require('flash_boot' in text and 'write_boot' not in text and 'flash_generic' not in text and 'reset_ak' not in text,

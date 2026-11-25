@@ -31,7 +31,7 @@ jobs:
       - name: Install only a utility emulator, not a kernel toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user
+          sudo apt-get install -y -qq qemu-user mksh
       - name: Validate independent conditional gate and actual pinned ARM64 utility capabilities
         run: |
           python3 -m unittest discover -s .github/nezha-package -p 'test_*.py' -v
@@ -44,7 +44,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nezha-conditional-ak3-${{ github.run_id }}
-          path: package-out/Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-conditional.zip
+          path: package-out/Nezha-r74-Nova-SUSFS-DroidSpaces-Networking-BBG-nova-entry-v2.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

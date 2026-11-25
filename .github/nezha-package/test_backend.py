@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -20,6 +21,8 @@ ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
 
 
 class TestBackend(unittest.TestCase):
+    shell = '/bin/sh'
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -43,7 +46,7 @@ class TestBackend(unittest.TestCase):
         defs = self.helpers.replace('@PAYLOAD_PINS@', '\n'.join(pins))
         if boot_pin is not None:
             defs = defs.replace('@REPACKED_BOOT_SHA@', boot_pin)
-        return subprocess.run(['/bin/sh', '-c', defs + '\nset -f\numask 077\n' + body,
+        return subprocess.run([self.shell, '-c', defs + '\nset -f\numask 077\n' + body,
                                'test', str(self.archive)], cwd=cwd or self.work, env=ENV,
                               capture_output=True, timeout=10)
 
@@ -60,6 +63,35 @@ class TestBackend(unittest.TestCase):
         for name, file in extracted.items():
             self.assertEqual(file.read_bytes(), FILES[name])
             self.assertFalse(file.is_symlink() or os.access(file, os.X_OK))
+
+
+    def test_payload_verification_does_not_require_host_awk(self):
+        self.pack(self.entries)
+        system = self.root / 'system-tools'
+        system.mkdir()
+        for tool in ('cat', 'sort', 'cmp', 'stat', 'head', 'tail', 'od', 'mkdir', 'unzip', 'sha256sum', 'rm'):
+            (system / tool).symlink_to(shutil.which(tool))
+        run = self.run_helper(f'PATH="{system}"; command -v awk >/dev/null && exit 9; verify_payload "$1"')
+        self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_encryption_and_invalid_directory_ranges_fail_before_extraction(self):
+        for field in ('encrypted', 'wrong_signature', 'bad_span'):
+            self.pack(self.entries)
+            data = bytearray(self.archive.read_bytes())
+            with ZipFile(self.archive) as archive:
+                central = archive.start_dir
+            if field == 'encrypted':
+                data[central + 8] |= 1
+            elif field == 'wrong_signature':
+                data[central] = 0
+            else:
+                data[-10] ^= 1
+            self.archive.write_bytes(data)
+            destination = self.work / field
+            destination.mkdir()
+            run = self.run_helper('verify_payload "$1"', cwd=destination)
+            self.assertNotEqual(run.returncode, 0, field)
+            self.assertFalse((destination / 'tools').exists())
 
     def test_reentry_shell_selection_uses_available_regular_executables(self):
         normal = self.root / 'normal-sh'
@@ -209,7 +241,7 @@ class TestBackend(unittest.TestCase):
         control = self.root / f'{expected}-{first_signal}'
         control.mkdir()
         body = 'umask 077; enter_workdir "$PWD" && run_owned /bin/sh -c "$1" child "$2" "$3"'
-        with subprocess.Popen(['/bin/sh', '-c', self.helpers + '\n' + body, 'parent', child,
+        with subprocess.Popen([self.shell, '-c', self.helpers + '\n' + body, 'parent', child,
                                control, expected], env=ENV, cwd=self.work) as parent:
             def await_file(path):
                 deadline = time.monotonic() + 5
@@ -269,7 +301,7 @@ class TestBackend(unittest.TestCase):
         env = {**ENV, 'AKHOME': str(self.work)}
         sentinel = self.work / 'keep'
         sentinel.touch()
-        result = subprocess.run(['/bin/sh', BACKEND, '3', '1', self.archive],
+        result = subprocess.run([self.shell, BACKEND, '3', '1', self.archive],
                                 env=env, cwd=self.work, capture_output=True, timeout=5)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(self.work.iterdir()), [sentinel])

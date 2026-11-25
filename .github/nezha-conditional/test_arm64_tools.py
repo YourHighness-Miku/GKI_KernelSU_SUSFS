@@ -125,6 +125,22 @@ class TestArm64Tools(unittest.TestCase):
         recovery.unlink()
         self.run_bb('ash', '-c', body, 'test', normal, recovery, status=1)
 
+
+    def test_nova_and_recovery_invocation_protocol(self):
+        definitions = self.helper('installer_error', 'update-binary') + '\n' + self.helper('parse_invocation', 'update-binary')
+        for suffix, expected in (((), b''), (('a',), b'_a'), (('b',), b'_b')):
+            body = definitions + '\nparse_invocation "$@" || exit $?\nprintf "%s\\n" "$REQUESTED_SLOT"'
+            self.assertEqual(self.run_bb('ash', '-c', body, 'nova', '3', '1', '/a path/kernel.zip', *suffix), expected + b'\n')
+        body = definitions + '\nparse_invocation "$@" 2>&1'
+        visible = self.run_bb('ash', '-c', body, 'nova', '3', '1', '/kernel.zip', 'inactive', status=1)
+        self.assertTrue(visible.startswith(b'ui_print Nezha[E_SLOT_ARG]'))
+
+    def test_explicit_slot_conflicts_are_rejected_without_property_override(self):
+        body = self.helper('requested_slot_allowed') + '\nrequested_slot_allowed "$@"'
+        for requested, raw, status in (('_a', '_a', 0), ('_b', '_b', 0), ('', '_a', 0),
+                                       ('_a', '_b', 1), ('_b', '_a', 1), ('', '', 1)):
+            self.run_bb('ash', '-c', body, 'nova', requested, raw, status=status)
+
     def test_regular_file_copy_hash_and_count(self):
         data = bytes(range(256)) * 4096 + b'partial final block'
         (self.work / 'input').write_bytes(data)

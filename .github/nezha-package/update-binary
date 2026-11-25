@@ -1,4 +1,23 @@
 #!/sbin/sh
+installer_error() {
+  printf 'ui_print Nezha[%s]: %s\n' "$1" "$2" >&2
+  return 1
+}
+
+parse_invocation() {
+  case $# in 3|4) ;; *) installer_error E_ARGS 'Expected three arguments plus an optional a/b slot.'; return 1 ;; esac
+  [ "$1" = 3 ] || { installer_error E_PROTOCOL 'Unsupported installer protocol.'; return 1; }
+  case $2 in ''|0*|*[!0-9]*|????*) installer_error E_FD 'Invalid output descriptor.'; return 1 ;; esac
+  [ "$2" -le 255 ] || { installer_error E_FD 'Invalid output descriptor.'; return 1; }
+  [ -n "$3" ] || { installer_error E_ZIP 'Missing archive path.'; return 1; }
+  REQUESTED_SLOT=''
+  if [ "$#" -eq 4 ]; then
+    case $4 in a|b) REQUESTED_SLOT="_$4" ;; *) installer_error E_SLOT_ARG 'Expected a or b as target slot.'; return 1 ;; esac
+  fi
+  OUTFD=$2; ZIPFILE=$3
+  case $ZIPFILE in /*) ;; *) ZIPFILE=$PWD/$ZIPFILE ;; esac
+}
+
 payload_names() {
   printf '%s\n' Image anykernel.sh LICENSE tools/ak3-core.sh tools/busybox tools/magiskboot \
     META-INF/com/google/android/updater-script
@@ -11,11 +30,22 @@ NEZHA_PINS
 }
 
 validate_pins() {
-  # Canonical positive decimal and lowercase hex only; no shell evaluation.
-  awk -F ' ' 'NF != 3 || $0 != $1 " " $2 " " $3 || $2 !~ /^[1-9][0-9]*$/ ||
-    length($2) > 8 || $2+0 > ($1 == "Image" ? 44603904 : 2097151) ||
-    length($3) != 64 || $3 !~ /^[0-9a-f]+$/ {exit 1}
-    {print $1} END {if (NR != 7) exit 1}' .check/pins > .check/names || return 1
+  local row name size digest extra count=0 limit
+  : > .check/names || return 1
+  while IFS= read -r row; do
+    count=$((count + 1)); [ "$count" -le 7 ] || return 1
+    IFS=' ' read -r name size digest extra <<PIN_ROW
+$row
+PIN_ROW
+    [ "$row" = "$name $size $digest" ] && [ -z "$extra" ] || return 1
+    case $size in ''|0*|*[!0-9]*|?????????*) return 1 ;; esac
+    case $digest in *[!0-9a-f]*) return 1 ;; esac
+    [ "${#digest}" -eq 64 ] || return 1
+    limit=2097151; [ "$name" != Image ] || limit=44603904
+    [ "$size" -le "$limit" ] || return 1
+    printf '%s\n' "$name" >> .check/names || return 1
+  done < .check/pins
+  [ "$count" -eq 7 ] || return 1
   payload_names > .check/expected && sort .check/expected > .check/want &&
     sort .check/names > .check/got && cmp -s .check/want .check/got
 }
@@ -39,19 +69,32 @@ raw_inventory() {
   span=$(($1 + 256*$2 + 65536*$3))
   start=$(($5 + 256*$6 + 65536*$7 + 16777216*$8))
   [ "$span" -le 65536 ] && [ $((start + span + 22)) -eq "$bytes" ] || return 1
-  od -An -v -tu1 -j "$start" -N "$span" .check/input.zip > .check/octets || return 1
-  awk '{for (i=1; i<=NF; ++i) b[n++]=$i}
-    END {p=0; while (p<n) {
-      if (++entries>8 || p+46>n || b[p]!=80 || b[p+1]!=75 || b[p+2]!=1 || b[p+3]!=2) exit 1
-      # DOS directory bit and (when present) Unix file type, even without a trailing /.
-      type=int(b[p+41]/16)
-      if (int(b[p+38]/16)%2 || (b[p+5]==3 && type!=0 && type!=8) || b[p+8]%2) exit 1
-      len=b[p+28]+256*b[p+29]; extra=b[p+30]+256*b[p+31]; comment=b[p+32]+256*b[p+33]
-      p+=46; if (len<1 || len>64 || p+len+extra+comment>n) exit 1
-      for (j=0; j<len; ++j) {v=b[p+j]; if (v<33 || v>126) exit 1; printf "%c", v}
-      print ""; p+=len+extra+comment
-    } if (entries!=8) exit 1}' .check/octets > .check/names &&
-    sort .check/names > .check/got && cmp -s .check/want .check/got
+  octets=$(od -An -v -tu1 -j "$start" -N "$span" .check/input.zip) || return 1
+  set -- $octets
+  [ "$#" -eq "$span" ] || return 1
+  local entries=0 type len extra comment v
+  : > .check/names || return 1
+  while [ "$#" -gt 0 ]; do
+    entries=$((entries + 1))
+    [ "$entries" -le 8 ] && [ "$#" -ge 46 ] || return 1
+    [ "$1 $2 $3 $4" = '80 75 1 2' ] || return 1
+    type=$((${42} / 16))
+    [ "$((${39} / 16 % 2))" -eq 0 ] && [ "$(($9 % 2))" -eq 0 ] || return 1
+    if [ "$6" -eq 3 ]; then
+      [ "$type" -eq 0 ] || [ "$type" -eq 8 ] || return 1
+    fi
+    len=$((${29} + 256 * ${30})); extra=$((${31} + 256 * ${32})); comment=$((${33} + 256 * ${34}))
+    shift 46
+    [ "$len" -ge 1 ] && [ "$len" -le 64 ] && [ "$#" -ge $((len + extra + comment)) ] || return 1
+    while [ "$len" -gt 0 ]; do
+      v=$1; [ "$v" -ge 33 ] && [ "$v" -le 126 ] || return 1
+      printf "\\$(printf '%03o' "$v")" >> .check/names || return 1
+      shift; len=$((len - 1))
+    done
+    printf '\n' >> .check/names || return 1
+    shift "$((extra + comment))"
+  done
+  [ "$entries" -eq 8 ] && sort .check/names > .check/got && cmp -s .check/want .check/got
 }
 
 # Record the producer status as well as limiting what the consumer can write.
@@ -142,27 +185,37 @@ run_owned() {
   return "$child_status"
 }
 
+clean_reentry() {
+  local cleanenv=$1 shell=$2 entry=$3
+  shift 3
+  exec "$cleanenv" -i PATH=/system/bin:/sbin LC_ALL=C "$shell" -c '
+    entry=$1; shift; . "$entry"
+  ' nezha-clean/ "$entry" "$@"
+}
+
 main() {
   set -f
   umask 077
-  [ "$#" -eq 3 ] || return 1
-  OUTFD=$2; ZIPFILE=$3
-  case $OUTFD in ''|*[!0-9]*) return 1 ;; esac
-  case $ZIPFILE in /*) ;; *) ZIPFILE=$PWD/$ZIPFILE ;; esac
-  check_platform && load_boot_pin || return 1
-  for util in awk cat chmod cmp env head mkdir mktemp od rm sha256sum sort stat tail unzip; do
-    command -v "$util" >/dev/null || return 1
+  parse_invocation "$@" || return 1
+  check_platform || { installer_error E_PLATFORM 'Root AArch64 installer context required.'; return 1; }
+  load_boot_pin || { installer_error E_GOLDEN 'Accepted output identity missing.'; return 1; }
+  for util in cat chmod cmp env head mkdir mktemp od rm sha256sum sort stat tail unzip; do
+    command -v "$util" >/dev/null || { installer_error E_TOOL "Required system tool unavailable: $util"; return 1; }
   done
-  zip_size "$ZIPFILE" || return 1
+  zip_size "$ZIPFILE" || { installer_error E_ZIP 'Archive is missing, linked or outside its size bound.'; return 1; }
   parent=/tmp
-  [ -d "$parent" ] || parent=/data/local/tmp
-  [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
-  enter_workdir "$parent" || return 1
-  verify_payload "$ZIPFILE" || return 1
+  [ -d "$parent" ] && [ ! -L "$parent" ] || parent=/data/local/tmp
+  [ -d "$parent" ] && [ ! -L "$parent" ] || { installer_error E_TEMP 'No supported private-work parent.'; return 1; }
+  enter_workdir "$parent" || { installer_error E_TEMP 'Cannot create the private workspace.'; return 1; }
+  verify_payload "$ZIPFILE" || { installer_error E_PAYLOAD 'Archive inventory or payload authentication failed.'; return 1; }
   chmod 700 tools/busybox tools/magiskboot && mkdir bin &&
-    "$AKHOME/tools/busybox" --install -s "$AKHOME/bin" || return 1
-  run_owned env -i AKHOME="$AKHOME" OUTFD="$OUTFD" PATH="$AKHOME/tools:$AKHOME/bin:/system/bin:/sbin" \
+    "$AKHOME/tools/busybox" --install -s "$AKHOME/bin" || { installer_error E_TOOLS 'Authenticated tools could not initialize.'; return 1; }
+  printf 'ui_print Nezha: archive authenticated; checking the pinned device state.\n'
+  run_owned env -i AKHOME="$AKHOME" OUTFD="$OUTFD" REQUESTED_SLOT="$REQUESTED_SLOT" PATH="$AKHOME/tools:$AKHOME/bin:/system/bin:/sbin" \
     EXPECTED_REPACKED_SHA256="$EXPECTED_REPACKED_SHA256" ANDROID_ROOT=/system "$AKHOME/tools/busybox" ash anykernel.sh
+  child_status=$?
+  [ "$child_status" -eq 0 ] || installer_error E_INSTALL 'Installer stopped; retain the preceding Nezha error code.'
+  return "$child_status"
 }
 
 # entrypoint
@@ -179,11 +232,10 @@ if [ "$0" = 'nezha-clean/' ]; then
   exit $?
 fi
 case $0 in /*) entry=$0 ;; *) entry=./$0 ;; esac
-entryshell=$(select_entry_shell /system/bin/sh /sbin/sh) || exit 1
+entryshell=$(select_entry_shell /system/bin/sh /sbin/sh) || { installer_error E_SHELL 'No supported system or recovery shell.'; exit 1; }
 for cleanenv in /system/bin/env /sbin/env; do
   [ -x "$cleanenv" ] || continue
-  exec "$cleanenv" -i PATH="$PATH" LC_ALL=C "$entryshell" -c '
-    entry=$1; shift; . "$entry"
-  ' nezha-clean/ "$entry" "$@"
+  clean_reentry "$cleanenv" "$entryshell" "$entry" "$@"
 done
+installer_error E_ENV 'No supported clean environment tool.'
 exit 1
