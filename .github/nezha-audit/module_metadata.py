@@ -7,7 +7,11 @@ from pathlib import Path
 
 from module_inventory import DIR, directory, read_file
 
-NAMES = {'modules.dep', 'modules.alias', 'modules.softdep', 'modules.blocklist'}
+NAMES = {
+    'modules.dep', 'modules.alias', 'modules.softdep', 'modules.blocklist',
+    'modules.options', 'system_dlkm.modules.blocklist',
+    'modules.audio.ar.blocklist', 'modules.audio.legacy.blocklist',
+}
 
 
 def collect(roots):

@@ -21,6 +21,35 @@ class ModuleMetadataTests(unittest.TestCase):
             self.assertEqual(item['sha256'], hashlib.sha256(text).hexdigest())
             self.assertIn('no runtime', result['scope'])
 
+    def test_preserves_provider_policy_and_optional_handler_declarations(self):
+        declarations = {
+            'system_dlkm.modules.blocklist': b'blocklist zram\nblocklist zsmalloc\n',
+            'modules.options': b'dyn_options example root /vendor/bin/example\n',
+            'modules.audio.ar.blocklist': b'',
+            'modules.audio.legacy.blocklist': b'blocklist audio_example\n',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, data in declarations.items():
+                (root / name).write_bytes(data)
+            (root / 'modules.dep.bin').write_bytes(b'\x00not a text declaration')
+            rows = {item['path']: item for item in collect([root])['files']}
+            self.assertEqual(set(rows), set(declarations))
+            for name, data in declarations.items():
+                self.assertEqual(rows[name]['text'], data.decode())
+                self.assertEqual(rows[name]['bytes'], len(data))
+                self.assertEqual(rows[name]['sha256'], hashlib.sha256(data).hexdigest())
+
+    def test_provider_policy_symlink_is_not_followed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'unselected'
+            target.write_text('blocklist zsmalloc\n')
+            (root / 'system_dlkm.modules.blocklist').symlink_to(target)
+            with self.assertRaises(ValueError):
+                collect([root])
+
+
     def test_selected_symlink_and_binary_declaration_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
