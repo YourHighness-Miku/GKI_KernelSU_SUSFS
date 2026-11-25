@@ -1,0 +1,103 @@
+name: Nezha public OTA boot assessment
+run-name: Nezha public OTA boot and signing assessment — reports only
+on:
+  push:
+    branches: [fix/nezha-r74-binder-baseline]
+    paths:
+      - .github/workflows/nezha-boot-check.yml
+      - .github/nezha/**
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nezha-public-boot-assessment
+  cancel-in-progress: false
+jobs:
+  assess:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      SOURCE_RUN: '45512575513'
+      SOURCE_SHA: 46141e55769d8dd3b26bee8739561b1221485d2a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Wait for the exact combined run and require every gate to pass
+        timeout-minutes: 240
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir reports
+          python3 - <<'PY'
+          import json, os, subprocess, time
+          from pathlib import Path
+          deadline = time.monotonic() + 4 * 60 * 60
+          endpoint = f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['SOURCE_RUN']}"
+          while True:
+              result = subprocess.run(['gh', 'api', endpoint], check=True, capture_output=True, text=True, timeout=45)
+              run = json.loads(result.stdout)
+              Path('reports/source-run.json').write_text(json.dumps(run, indent=2) + '\n')
+              assert run['head_sha'] == os.environ['SOURCE_SHA']
+              assert run['head_branch'] == 'fix/nezha-r74-binder-baseline'
+              assert run['path'] == '.github/workflows/nezha-baseline.yml'
+              if run['status'] == 'completed':
+                  assert run['conclusion'] == 'success', 'Combined gates failed: refusing candidate download or repack'
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit('Upstream result not available within bounded wait; no candidate accepted')
+              print(f"Waiting for exact combined run {run['id']}: {run['status']}", flush=True)
+              time.sleep(60)
+          PY
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "nezha-r74-combined-kernel-$SOURCE_RUN" --dir candidate
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "nezha-r74-combined-$SOURCE_RUN" --dir source-reports
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          source = Path('source-reports')
+          binder = json.loads((source / 'binder-result.json').read_text())
+          assert binder['required'] == binder['matched'] == 240 and not binder['missing'] and not binder['wrong_crc']
+          abi = json.loads((source / 'ds-abi-result.json').read_text())
+          assert abi['baseline_exports'] == 9964 and not abi['changed_or_missing']
+          assert abi['task_bytes'] == [5184, 5184] and not abi['changed_named_task_members'] and not abi['missing_requested_config']
+          cases = json.loads((source / 'combined-kunit-result.json').read_text())['cases']
+          assert set(cases) == {'state_race_test', 'semundo_share_test', 'shm_lifecycle_test', 'semundo_alloc_failure_test'}
+          assert set(cases.values()) == {'PASS'}
+          expected, = [line.split()[0] for line in (source / 'SHA256SUMS').read_text().splitlines() if line.split()[1] == 'reports/Image']
+          actual = hashlib.sha256(Path('candidate/Image').read_bytes()).hexdigest()
+          assert actual == expected, 'Candidate Image does not match passed source-run reports'
+          Path('reports/candidate-identity.json').write_text(json.dumps({'sha256': actual, 'source_evidence': 'Exact success-only Image and reports from SOURCE_RUN'}, indent=2) + '\n')
+          PY
+          python3 .github/scripts/nezha_full_gate.py config source-reports/built.config reports/combined-config-recheck.json
+      - name: Test bounded payload and boot metadata parsers
+        run: python3 -m unittest discover -s .github/nezha -p test_boot_gate.py -v
+      - name: Prepare offline image inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-user
+          mkdir tools
+          curl -fL --retry 3 'https://android.googlesource.com/platform/external/avb/+/5ac0c3a071d811846a62412383dd6e259f341e6e/avbtool.py?format=TEXT' | base64 -d > tools/avbtool.py
+          curl -fL --retry 3 'https://raw.githubusercontent.com/WildKernels/AnyKernel3/e1e9dce98430c5c6f231f7094a8c7f4ecaf50948/tools/magiskboot' -o tools/magiskboot
+          echo 'e5a664a38db623da00f080219bc0ee60a640a9dc4a872803616fae4938ac749b  tools/avbtool.py' | sha256sum -c -
+          echo '4c480c9ffc51b4b9d8c3760bb188fd1eb73972a90983963ef791bca6faa65d6c  tools/magiskboot' | sha256sum -c -
+          chmod 700 tools/magiskboot
+      - name: Fetch and verify only pinned public OTA boot-chain references
+        timeout-minutes: 35
+        run: python3 .github/nezha/boot_gate.py fetch public-reference reports/public-reference.json
+      - name: Verify named AVB descriptors against actual public-reference bytes
+        env:
+          BOOT_GATE_REFERENCE_BOOT: public-reference/boot.img
+          BOOT_GATE_AVBTOOL: tools/avbtool.py
+        run: python3 -m unittest discover -s .github/nezha -p test_boot_gate.py -v
+      - name: Assess exact candidate repack and original signing bindings without creating a flashable package
+        run: python3 .github/nezha/boot_gate.py assess public-reference candidate/Image tools reports
+      - name: Retain text and JSON evidence only, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-boot-assessment-${{ github.run_id }}
+          path: |
+            reports/*.json
+            reports/*.txt
+          if-no-files-found: error
+          retention-days: 7
